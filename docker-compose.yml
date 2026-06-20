@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL_ASYNC: postgresql+asyncpg://app:app@postgres:5432/app
+      DATABASE_URL_SYNC: postgresql+psycopg://app:app@postgres:5432/app
+      BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')\""
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  cpu-worker:
+    build: ./backend
+    environment:
+      DATABASE_URL_SYNC: postgresql+psycopg://app:app@postgres:5432/app
+      BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--pool=prefork", "-n", "cpu@%h", "-Q", "cpu", "-c", "4", "--loglevel=INFO"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  io-worker:
+    build: ./backend
+    environment:
+      DATABASE_URL_SYNC: postgresql+psycopg://app:app@postgres:5432/app
+      BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--pool=threads", "-n", "io@%h", "-Q", "io", "-c", "20", "--loglevel=INFO"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api

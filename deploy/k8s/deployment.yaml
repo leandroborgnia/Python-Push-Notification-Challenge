@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-api
+  labels:
+    app: notification-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-api
+  template:
+    metadata:
+      labels:
+        app: notification-api
+    spec:
+      containers:
+        - name: api
+          image: notification-service:latest
+          # One uvicorn process per pod; Kubernetes scales via replicas (no gunicorn).
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL_ASYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-async
+            - name: DATABASE_URL_SYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-sync
+            - name: BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: broker-url
+          # Liveness = process only (failure -> restart); never gated on DB/workers.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Readiness = process + DB (failure -> depool, no restart); never gated on workers.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10

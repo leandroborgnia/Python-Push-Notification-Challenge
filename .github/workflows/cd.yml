@@ -1,0 +1,31 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  validate-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Kubernetes manifests (kubeconform)
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz
+          ./kubeconform -strict -summary deploy/k8s/
+
+  deploy:
+    needs: validate-manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t notification-service:${{ github.sha }} backend
+      # Deploy to the cluster. Requires KUBECONFIG / registry credentials configured as
+      # repository secrets; the apply wires /livez -> livenessProbe and /readyz -> readinessProbe
+      # via deploy/k8s/.
+      - name: Apply manifests
+        run: echo "kubectl apply -f deploy/k8s/   # configure KUBECONFIG + image registry first"
