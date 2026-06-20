@@ -9,7 +9,7 @@ description: "Task list template for feature implementation"
 
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, contracts/
 
-**Tests**: The examples below include test tasks. Tests are OPTIONAL - only include them if explicitly requested in the feature specification.
+**Tests**: This project's Constitution makes testing NON-NEGOTIABLE (Principle V). Any feature that touches the API, persistence, or channel sends MUST include test tasks: `pytest`/`pytest-asyncio` via `httpx.AsyncClient`, integration tests against a real PostgreSQL via Testcontainers (no DB mocking), and `respx` for external HTTP. Do not drop these tasks. The inline "(OPTIONAL)" labels in the sample phases below are generic template text — treat tests as required here.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 

@@ -1,0 +1,97 @@
+openapi: 3.1.0
+info:
+  title: System Liveness — Health API
+  version: 0.1.0
+  description: >
+    Health surfaces for the walking skeleton. Three endpoints with distinct semantics:
+    /livez (process-only liveness), /readyz (process + DB readiness), /health (rich aggregate
+    that adds broker + per-pool worker pings). k8s probes (/livez, /readyz) are NEVER gated on
+    workers or the broker. The aggregate check is shallow, bounded, and never enqueues/awaits a job.
+    All endpoints are unauthenticated in this slice (developer-facing).
+paths:
+  /livez:
+    get:
+      summary: Liveness probe (process-only)
+      description: >
+        Returns 200 whenever the API process is alive. MUST NOT touch the data store, broker, or
+        workers. Wired to the Kubernetes livenessProbe (failure → restart).
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: alive }
+  /readyz:
+    get:
+      summary: Readiness probe (process + DB)
+      description: >
+        Returns 200 when a trivial data-store connectivity probe (SELECT 1) succeeds, 503 when the
+        data store is unreachable. MUST NOT be gated on broker/worker reachability. Wired to the
+        Kubernetes readinessProbe (failure → depool from traffic, no restart).
+      responses:
+        "200":
+          description: Process up and data store reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ready }
+        "503":
+          description: Data store unreachable (pod should be depooled, not restarted).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: not_ready }
+                  detail: { type: string }
+  /health:
+    get:
+      summary: Aggregate health (rich)
+      description: >
+        Runs shallow, cheap, bounded checks — data store (SELECT 1), message broker reachability, and
+        a control/liveness ping to a worker on EACH pool (cpu, io). Returns 200 only if all pass, 503
+        if any fails. The per-subsystem breakdown is ALWAYS present in the body. Never blocks on a
+        background job; returns within the bounded timeout even when a dependency is failing.
+      responses:
+        "200":
+          description: All checked subsystems healthy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessReport" }
+        "503":
+          description: At least one checked subsystem failed (breakdown identifies which).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessReport" }
+components:
+  schemas:
+    HealthStatus:
+      type: string
+      enum: [healthy, not_healthy]
+    SubsystemCheck:
+      type: object
+      required: [name, passed]
+      properties:
+        name:
+          type: string
+          enum: [data_store, message_broker, worker_pool_cpu, worker_pool_io]
+        passed: { type: boolean }
+        detail: { type: [string, "null"], description: "Elapsed/reason/error summary." }
+    ReadinessReport:
+      type: object
+      required: [status, checked_at, checks]
+      properties:
+        status: { $ref: "#/components/schemas/HealthStatus" }
+        checked_at: { type: string, format: date-time, description: "UTC evaluation time." }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/SubsystemCheck" }
+          description: One entry per subsystem; always present, in both 200 and 503 responses.
