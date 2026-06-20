@@ -28,4 +28,7 @@ jobs:
       # repository secrets; the apply wires /livez -> livenessProbe and /readyz -> readinessProbe
       # via deploy/k8s/.
       - name: Apply manifests
-        run: echo "kubectl apply -f deploy/k8s/   # configure KUBECONFIG + image registry first"
+        run: |
+          # Deploy the immutable git-SHA image tag (never :latest). Requires KUBECONFIG + registry.
+          echo "kubectl apply -f deploy/k8s/"
+          echo "kubectl set image deployment/notification-api api=notification-service:${{ github.sha }}"

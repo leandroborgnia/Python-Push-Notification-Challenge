@@ -16,7 +16,8 @@ spec:
     spec:
       containers:
         - name: api
-          image: notification-service:latest
+          # Pinned default; CD overrides with the immutable git-SHA tag (never :latest).
+          image: notification-service:0.1.0
           # One uvicorn process per pod; Kubernetes scales via replicas (no gunicorn).
           command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:

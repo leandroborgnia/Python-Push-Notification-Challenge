@@ -1,6 +1,12 @@
 <!--
 SYNC IMPACT REPORT
-Version change: 1.1.0 → 1.2.0  (amendment 2026-06-20)
+Version change: 1.2.0 → 1.3.0  (amendment 2026-06-20)
+Bump rationale (1.3.0): Principle I extended with a Pinned & Reproducible Builds rule — no floating
+tags (`latest`); container base images, build tools, the deployed app image, and GitHub Actions MUST
+be pinned to explicit versions / SHAs (base images & build tools SHOULD be pinned by digest in prod).
+MINOR: new normative guidance, no principle removed. Triggered by an unpinned `uv:latest` in the
+Dockerfile.
+Version change (prior): 1.1.0 → 1.2.0  (amendment 2026-06-20)
 Bump rationale (1.2.0): Principle V (Testing) extended — Testcontainers now MUST cover BOTH PostgreSQL
 and RabbitMQ; background-task routing tests run against a real broker with real workers (no mocks, no
 eager mode). MINOR: materially expands the testing approach. Triggered by the 001-system-liveness plan
@@ -62,6 +68,12 @@ MUST be clean and proportionate, but the full stack defined here MUST be retaine
   pre-commit and re-verified in CI; code that fails either is not mergeable.
 - Python and its dependencies MUST be managed with `uv` (packaging and Python-version pinning);
   the lockfile MUST be committed so environments are reproducible.
+- **Pinned & reproducible builds**: all external dependencies MUST be version-pinned with no floating
+  tags. Committed lockfiles (`uv.lock`, `package-lock.json`) pin language deps; container base images
+  and build tools MUST be pinned to an explicit version — NEVER `latest` or other move-to-newest tags;
+  the deployed application image MUST be referenced by an immutable tag or digest (never `latest`); and
+  GitHub Actions MUST be pinned to a released major tag or a commit SHA. Base images and third-party
+  build tools SHOULD additionally be pinned by digest in production builds.
 - Domain and application code MUST be fully type-annotated; `mypy` MUST run strict enough that
   untyped definitions in those layers fail the check.
 - Application code MUST log through `structlog` (no bare `print` or unstructured stdlib logging),
@@ -219,4 +231,4 @@ proportionate — and keep all of it.
 - Runtime guidance for AI agents lives in `CLAUDE.md`; it MUST be kept consistent with this
   Constitution.
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-20
+**Version**: 1.3.0 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-20

@@ -67,7 +67,7 @@ smoke CLI, 1 minimal frontend page. No channels, auth, or analytics (explicitly 
 
 | # | Principle | Status | How this plan complies |
 |---|-----------|--------|------------------------|
-| I | Code Quality (typed, linted, observable) | ✅ PASS | ruff + mypy via pre-commit & CI; structlog/OTel/Sentry wired at startup (FR-016) and asserted (FR-017); config via pydantic-settings. |
+| I | Code Quality (typed, linted, observable, pinned) | ✅ PASS | ruff + mypy via pre-commit & CI; structlog/OTel/Sentry wired at startup (FR-016) and asserted (FR-017); config via pydantic-settings; **pinned builds** — committed lockfiles, no `latest` tags, `uv` pinned by digest, deployed image by immutable tag (v1.3.0). |
 | II | Architecture (hexagonal, proportionate, open/closed) | ✅ PASS | Domain `ReadinessReport`/`SubsystemCheckResult` are framework-free; `BrokerProbe`/`WorkerProbe`/repository **ports** isolate I/O; adapters under `adapters/`. No channel code yet (out of scope) — extension points respected, nothing in the dispatch core to edit. |
 | III | Background Processing (Celery, mixed workload, sync seam) | ✅ PASS | Celery + RabbitMQ; `cpu` queue → prefork, `io` queue → threads; workers use the **sync psycopg v3** engine, API uses **asyncpg**; `ignore_result=True`. |
 | IV | Resilience (first-class) | ✅ PASS (scoped) | This slice models the liveness round-trip + bounded/timeout checks; full retry/backoff/circuit-breaker belongs to the channel features (out of scope) — no resilience code is removed or precluded. |
