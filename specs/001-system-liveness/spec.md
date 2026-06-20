@@ -14,13 +14,14 @@
 
 - Q: When the readiness endpoint is called, how is the per-path background round-trip performed? → A: Split the check. The always-on readiness endpoint does **shallow, cheap, bounded per-path connectivity only** — data store `SELECT 1`, message broker reachability, and a worker control/liveness ping per pool — and it MUST NOT block on a job result or couple API readiness to worker job-execution liveness. The **full per-path no-op job round-trip** that proves queue→pool routing end-to-end is a **separate on-demand check**, exercised primarily as a CI/deploy smoke test, not on every readiness call.
 - Q: Is wiring/verifying the telemetry stack (structured logging, tracing, error reporting) part of this slice's Definition of Done? → A: Yes — wire **and** verify. Initialize structured logging, distributed tracing, and error reporting at startup, and assert minimal emission in tests: a structured startup log line, a trace span on the readiness request, and error-reporting initialization. Telemetry is not a readiness-checked subsystem; it is verified via the test suite.
-- Q: How does the aggregate readiness endpoint relate to the API's Kubernetes probe, and what status does it return when unhealthy? → A: **Two endpoints, status-coded.** A separate, narrow k8s liveness/readiness probe reflects only the API process and the dependencies it needs to serve (e.g., data store), is **never** gated on worker pools, and returns 2xx/503. The rich aggregate readiness endpoint returns **HTTP 200 when healthy and HTTP 503 when not-healthy**, always including the full per-subsystem breakdown in the body. Implementing the probe endpoint is in scope; wiring it into k8s manifests is a planning/ops detail. (Refined in Session 2026-06-20: this narrow probe is split into a process-only **liveness** probe and a process+data-store **readiness** probe — see FR-018/FR-020.)
+- Q: How does the aggregate readiness endpoint relate to the API's Kubernetes probe, and what status does it return when unhealthy? → A: **Two endpoints, status-coded.** A separate, narrow k8s liveness/readiness probe reflects only the API process and the dependencies it needs to serve (e.g., data store), is **never** gated on worker pools, and returns 2xx/503. The rich aggregate readiness endpoint returns **HTTP 200 when healthy and HTTP 503 when not-healthy**, always including the full per-subsystem breakdown in the body. Implementing the probe endpoint is in scope; the k8s manifest wiring is also in scope (see Session 2026-06-20). (Refined in Session 2026-06-20: this narrow probe is split into a process-only **liveness** probe and a process+data-store **readiness** probe — see FR-018/FR-020.)
 - Q: How is background-job completion observed — is there a task result store subsystem? → A: **No result backend.** Background tasks run with results disabled (`ignore_result=True`); the "task result store" is removed as a readiness subsystem entirely (with no backend there is nothing to health-check). The on-demand smoke check enqueues a trivial no-op task **defined in our own codebase** — one per worker pool the architecture defines — as a real task on the real broker reaching a real worker (no mock/stub). On execution the task writes a completion record keyed to that specific invocation into an Alembic-managed table using the workers' **synchronous (psycopg)** engine; the check reads that record back through the **async (asyncpg)** data layer with a bounded timeout. Success = the invocation's record appears within the limit. This deep round-trip is the on-demand/CI smoke check only, never part of the always-on readiness endpoint.
 - Q: I/O worker pool — threads or gevent (artifacts disagreed)? → A: **Threads** (`--pool=threads`). I/O tasks touch Postgres via the synchronous `psycopg` (v3) engine, which is natively thread-safe, so threads avoid psycogreen monkey-patching and the realistic fan-out does not justify gevent. The constitution was aligned to threads (gevent + psycogreen documented as the higher-concurrency alternative), and the sync driver is pinned to psycopg v3 (psycopg3) across all artifacts. The spec itself stays pool-type-agnostic (it refers only to "background-processing pools").
 
 ### Session 2026-06-20
 
 - Q: Should the narrow k8s probe be split into liveness vs readiness? → A: **Yes, split.** A **liveness** probe reflects only the API process (failure → restart) and MUST NOT fail on data-store or worker outages; a **readiness** probe reflects the API process + data-store connectivity (failure → depool from traffic, no restart) and MUST NOT be gated on workers. This prevents a data-store outage from crash-looping the API while still depooling it from traffic. Both remain distinct from the aggregate readiness endpoint (FR-001).
+- Q: Is wiring the probes into Kubernetes manifests in scope for this slice (analyze finding I1)? → A: **Yes, in scope.** This slice ships Kubernetes Deployment + Service manifests wiring `/livez`→livenessProbe and `/readyz`→readinessProbe (never gated on workers), plus a CD workflow that deploys them. Supersedes the Session 2026-06-19 note that treated manifest wiring as a deferred planning/ops detail.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -235,8 +236,8 @@ minimal telemetry emission are all covered against ephemeral dependencies.
   pod should be removed from traffic (depooled) without a restart, it MUST return HTTP 503 when the data
   store is unreachable and HTTP 2xx otherwise. It MUST NOT be gated on worker-pool reachability and MUST
   be distinct from the aggregate readiness endpoint (FR-001). Implementing both probe endpoints (FR-018,
-  FR-020) is in scope; wiring them into Kubernetes manifests is not required for this slice's local + CI
-  scope.
+  FR-020) AND wiring them into the Kubernetes manifests (livenessProbe → `/livez`, readinessProbe →
+  `/readyz`) are in scope for this slice.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -280,6 +281,8 @@ minimal telemetry emission are all covered against ephemeral dependencies.
   tested cases; the narrow liveness probe stays HTTP 2xx whenever the API process is alive (even if the
   data store or all workers are down); and the narrow readiness probe returns HTTP 503 when the data store
   is unreachable and HTTP 2xx otherwise.
+- **SC-011**: The Kubernetes Deployment/Service manifests validate cleanly in CI (schema/dry-run check)
+  and wire `/livez`→livenessProbe and `/readyz`→readinessProbe, with neither probe gated on workers.
 
 ## Assumptions
 

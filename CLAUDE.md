@@ -54,8 +54,8 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 | API (dev) | `uv run uvicorn app.main:app --reload --port 8000` |
 | API (prod, per pod) | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
 | RabbitMQ | `docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:4-management` |
-| Celery CPU worker (prefork) | `uv run celery -A app.tasks.celery_app worker --pool=prefork -Q cpu -c 4` |
-| Celery I/O worker (threads) | `uv run celery -A app.tasks.celery_app worker --pool=threads -Q io -c 20` |
+| Celery CPU worker (prefork) | `uv run celery -A app.tasks.celery_app worker --pool=prefork -n cpu@%h -Q cpu -c 4` |
+| Celery I/O worker (threads) | `uv run celery -A app.tasks.celery_app worker --pool=threads -n io@%h -Q io -c 20` |
 | New migration | `uv run alembic revision --autogenerate -m "msg"` |
 | Apply migrations | `uv run alembic upgrade head` |
 | Single test | `uv run pytest tests/integration/test_x.py::test_case` |
@@ -98,7 +98,8 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
   footgun. ORM models are shared; engines and sessions are not. API → `async_engine.py`/`async_repo.py`;
   Celery → `sync_engine.py`/`sync_repo.py`.
 - **Route by workload**: CPU-bound tasks → `cpu` queue (prefork pool); I/O-bound sends → `io` queue
-  (threads pool). psycopg3 works with threads natively, no monkey-patching.
+  (threads pool). psycopg3 works with threads natively, no monkey-patching. Start workers with
+  pool-identifying nodenames (`-n cpu@%h`, `-n io@%h`) so the readiness check can ping a worker per pool.
 - **Adapters simulate failure on purpose** (latency, random errors, 429s). The resilience logic
   (retry/backoff, circuit breaker, idempotency) lives in `application/`, **not** in the adapters.
 - **Never edit an applied migration — add a new one.**

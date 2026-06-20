@@ -44,7 +44,8 @@ real broker and real in-test worker processes. respx reserved for future externa
 slice).
 
 **Target Platform**: Linux containers. Dev: `docker compose up`. Prod: Kubernetes (single-uvicorn
-pods), `/livez` → livenessProbe, `/readyz` → readinessProbe. Celery workers are separate processes.
+pods) via Deployment/Service manifests in `deploy/k8s/` (`/livez` → livenessProbe, `/readyz` →
+readinessProbe). Celery workers are separate processes.
 
 **Project Type**: Web application (monorepo: `backend/` + `frontend/`).
 
@@ -155,7 +156,10 @@ frontend/
 docker-compose.yml           # api + cpu worker + io worker + postgres + rabbitmq + frontend
 .github/workflows/
   ci.yml                     # ruff + mypy + pytest (Testcontainers) + Coveralls
-  cd.yml                     # build + deploy to Kubernetes
+  cd.yml                     # build image + kubectl apply deploy/k8s manifests
+deploy/k8s/
+  deployment.yaml            # API Deployment: livenessProbe→/livez, readinessProbe→/readyz
+  service.yaml               # API Service
 ```
 
 **Structure Decision**: Web-application (Option 2) hexagonal layout per CLAUDE.md, with dependencies
@@ -182,8 +186,8 @@ Per the request to flag rather than invent. Items 1–2 were escalated and are n
    job-triggering surface). CI/deploy invoke it; an integration test drives the same use case.
 4. **Per-pool worker ping mechanism** — **Decided:** broadcast `app.control.ping(timeout=…)`, group
    responders by **nodename prefix**, and require at least one `cpu@*` and one `io@*` responder. This
-   requires workers to be started with pool-identifying nodenames (`-n cpu@%h`, `-n io@%h`) — a small
-   addition to the CLAUDE.md worker commands, to be applied in tasks.
+   requires workers to be started with pool-identifying nodenames (`-n cpu@%h`, `-n io@%h`) — already
+   applied to the CLAUDE.md worker commands and the docker-compose worker services (T025).
 5. **Smoke-test DB cleanup** — transaction-rollback isolation cannot cover a row written by a *separate
    worker process*. **Decided:** the smoke end-to-end test cleans up via truncation, not rollback;
    rollback isolation still applies to the readiness/aggregate tests.
