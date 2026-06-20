@@ -139,7 +139,7 @@ external HTTP (none in this slice).
 - [x] T040 [P] Create `README.md` documenting the Celery rationale (ARQ/TaskIQ preferable for a fully-async service; Celery chosen for the mixed CPU+I/O workload + ecosystem) and the gevent+psycogreen higher-concurrency alternative to the threads I/O pool (constitution Principle III)
 - [x] T041 [P] Configure coverage in `backend/pyproject.toml` (`[tool.coverage]`) and finalize Coveralls; re-run `quickstart.md` validation end-to-end
 - [x] T042 Run the full gate locally (`ruff`, `mypy`, `pytest`) and `python -m app.cli.smoke`; fix any findings (SC-008)
-- [x] T043 [P] Pin all dependencies for reproducible builds (constitution v1.3.0, Principle I): no `latest` tags — `uv` pinned by version + digest in `backend/Dockerfile`; deployed image referenced by an immutable tag in `deploy/k8s/deployment.yaml` + CD `kubectl set image` to the git-SHA tag; base images & GitHub Actions on explicit version/major tags
+- [x] T043 [P] Pin all dependencies for reproducible builds (constitution v1.3.1, Principle I): no floating tags — base images (`python`, `node`, `postgres`, `rabbitmq`) and `uv` pinned to explicit **patch version + digest** across `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`, and `tests/conftest.py`; deployed image referenced immutably (git-SHA tag) via `deploy/k8s/deployment.yaml` + CD `kubectl set image`; GitHub Actions on released major tags
 
 ---
 

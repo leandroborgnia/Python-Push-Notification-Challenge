@@ -17,6 +17,10 @@ _RABBITMQ_CONF = (
     Path(__file__).resolve().parents[2] / "deploy" / "rabbitmq" / "permit-deprecated.conf"
 )
 
+# Base images pinned to explicit patch version + digest (constitution Principle I).
+_POSTGRES_IMAGE = "postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"  # noqa: E501
+_RABBITMQ_IMAGE = "rabbitmq:4.3.2-alpine@sha256:8489bba72d91465b2ed422394966d270858252844cc7bd91dfb8ab3dd43fdaea"  # noqa: E501
+
 # Worker pool per platform: Celery prefork doesn't run on Windows, so use solo locally;
 # CI (Linux) uses the production pool types. Routing + the sync/async seam are what these
 # tests prove, not the pool implementation.
@@ -50,11 +54,11 @@ def container_urls() -> Iterator[tuple[str, str, str]]:
     from testcontainers.postgres import PostgresContainer
     from testcontainers.rabbitmq import RabbitMqContainer
 
-    rabbitmq = RabbitMqContainer("rabbitmq:4-alpine").with_volume_mapping(
+    rabbitmq = RabbitMqContainer(_RABBITMQ_IMAGE).with_volume_mapping(
         str(_RABBITMQ_CONF), "/etc/rabbitmq/conf.d/10-permit-deprecated.conf", "ro"
     )
     with (
-        PostgresContainer("postgres:16-alpine") as pg,
+        PostgresContainer(_POSTGRES_IMAGE) as pg,
         rabbitmq as mq,
     ):
         base = pg.get_connection_url()  # postgresql+psycopg2://user:pass@host:port/db
