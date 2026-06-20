@@ -1,6 +1,11 @@
 <!--
 SYNC IMPACT REPORT
-Version change: 1.0.0 → 1.1.0  (amendment 2026-06-19)
+Version change: 1.1.0 → 1.2.0  (amendment 2026-06-20)
+Bump rationale (1.2.0): Principle V (Testing) extended — Testcontainers now MUST cover BOTH PostgreSQL
+and RabbitMQ; background-task routing tests run against a real broker with real workers (no mocks, no
+eager mode). MINOR: materially expands the testing approach. Triggered by the 001-system-liveness plan
+(real broker→worker smoke check).
+Version change (prior): 1.0.0 → 1.1.0  (amendment 2026-06-19)
 Bump rationale (1.1.0): Principle III refined — the I/O-bound Celery pool is corrected from gevent to
 threads (psycopg v3 is natively thread-safe, so no psycogreen monkey-patching is needed; gevent +
 psycogreen is documented as the higher-concurrency alternative), and the synchronous driver is pinned
@@ -118,12 +123,15 @@ sync-engine seam is the correct, honest way to bridge a sync worker to async-fir
 **Rationale**: Resilience is the core learning goal; simulating failure and persisting every
 transition is what turns "it usually works" into a system whose behavior under failure is provable.
 
-### V. Testing (Real Postgres, Mocked HTTP, Non-Negotiable)
+### V. Testing (Real Postgres + Broker, Mocked HTTP, Non-Negotiable)
 
 - Tests MUST use `pytest` + `pytest-asyncio`, exercising the API through `httpx.AsyncClient`.
 - Integration tests MUST run against a REAL PostgreSQL provisioned by Testcontainers — a
   session-scoped container with per-test transaction-rollback isolation. The database MUST NOT be
   mocked, faked, or swapped for SQLite.
+- Tests that exercise background-task routing MUST run against a REAL RabbitMQ broker provisioned by
+  Testcontainers, driving REAL workers — the broker MUST NOT be mocked or run in eager mode. (Rows
+  written by a separate worker process are isolated by truncation rather than transaction rollback.)
 - The HTTP layer of external channel calls MUST be mocked with `respx`, not by monkeypatching
   adapter internals.
 - Coverage MUST be reported to Coveralls from CI.
@@ -177,8 +185,8 @@ proportionate — and keep all of it.
   lifecycle (`queued → sent → delivered | failed`).
 - **Observability**: `structlog` (logging), OpenTelemetry (tracing + metrics), Sentry (errors).
 - **Security**: OAuth2 + `PyJWT`; argon2 or bcrypt password hashing; secrets via environment.
-- **Testing**: `pytest`, `pytest-asyncio`, `httpx.AsyncClient`, Testcontainers (real Postgres),
-  `respx` (external HTTP), Coveralls (coverage).
+- **Testing**: `pytest`, `pytest-asyncio`, `httpx.AsyncClient`, Testcontainers (real Postgres +
+  RabbitMQ), `respx` (external HTTP), Coveralls (coverage).
 - **Quality tooling**: `ruff` (lint + format) and `mypy`, enforced via pre-commit and CI.
 - **Frontend**: React.
 - **Ops**: Docker (dev + prod), GitHub Actions (CI + CD), Kubernetes (prod API scaling).
@@ -189,7 +197,7 @@ proportionate — and keep all of it.
   React app) at the root.
 - **Pre-commit**: MUST run `ruff` (lint + format) and `mypy`; a failing hook blocks the commit.
 - **CI (GitHub Actions)**: MUST run `ruff`, `mypy`, and the full `pytest` suite (with the
-  Testcontainers Postgres) and publish coverage to Coveralls. A red pipeline blocks merge.
+  Testcontainers Postgres + RabbitMQ) and publish coverage to Coveralls. A red pipeline blocks merge.
 - **CD (GitHub Actions)**: deploys `prod` as Kubernetes-scaled single-uvicorn pods.
 - **Migrations**: any model change MUST ship with its Alembic revision in the same PR.
 - **Planning gate**: every feature plan MUST pass the Constitution Check before implementation
@@ -211,4 +219,4 @@ proportionate — and keep all of it.
 - Runtime guidance for AI agents lives in `CLAUDE.md`; it MUST be kept consistent with this
   Constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-19
+**Version**: 1.2.0 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-20

@@ -66,7 +66,7 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 | Frontend (dev / build) | `npm run dev` / `npm run build` (in `frontend/`) |
 
 > Run `pytest` on the **host** (or in CI), never inside a compose container — Testcontainers needs
-> access to the Docker daemon to spin up its own ephemeral Postgres.
+> access to the Docker daemon to spin up its own ephemeral Postgres and RabbitMQ.
 
 ## Environments
 

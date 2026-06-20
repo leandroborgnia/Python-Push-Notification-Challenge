@@ -9,7 +9,7 @@ All architecture is fixed by the constitution and the spec Clarifications; this 
 - **Decision**: Target **Python 3.13** (`requires-python = ">=3.13"`), single-version CI for now.
 - **Rationale**: Fully supported by FastAPI, SQLAlchemy 2.0, asyncpg, psycopg v3, Celery 5, structlog,
   OpenTelemetry, and uv; latest stable with no blockers in the stack.
-- **Status**: FLAGGED (#1) — not pinned upstream; override here propagates to `pyproject.toml` + CI.
+- **Status**: ✅ CONFIRMED (2026-06-20) — Python 3.13; pins `requires-python` + CI.
 - **Alternatives**: 3.12 (fine, slightly older); 3.14 (too new for some C-extension wheels at this date).
 
 ## R2. Health surface topology & contract
@@ -83,6 +83,9 @@ All architecture is fixed by the constitution and the spec Clarifications; this 
 - **Decision**:
   - **conftest** provisions a **session-scoped Postgres Testcontainer** (transaction-rollback isolation
     per test) and a **session-scoped RabbitMQ Testcontainer**.
+  - A worker fixture starts **both** pools — `cpu` (prefork, `-n cpu@%h -Q cpu`) and `io` (threads,
+    `-n io@%h -Q io`) — for every test that needs healthy worker pings (the aggregate `/health`
+    all-healthy path) **and** for the smoke round-trip, since readiness pings both pools.
   - **Probe/aggregate logic** is unit-tested through `BrokerProbe`/`WorkerProbe` **fakes**; integration
     tests exercise real adapters.
   - `/readyz` DB-down is tested by pointing the readiness check at a closed/invalid connection (or
@@ -119,5 +122,7 @@ All architecture is fixed by the constitution and the spec Clarifications; this 
 
 ## Resolved unknowns
 
-All Technical Context items are resolved except **R1 (Python version)**, which remains FLAGGED for a
-human decision but does not block subsequent phases (defaulted to 3.13).
+All Technical Context items are resolved. R1 (Python 3.13) and the RabbitMQ-in-tests question are
+confirmed (2026-06-20); the constitution (v1.2.0) now mandates Testcontainers for Postgres + RabbitMQ.
+The smoke CLI exits non-zero on failure for CI gating (see contracts/smoke-check-cli.md); the in-test
+worker fixture starts both `cpu` and `io` pools.

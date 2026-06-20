@@ -24,14 +24,14 @@ re-decide them. Items the spec/constitution leave open are listed under
 
 ## Technical Context
 
-**Language/Version**: Python — **NEEDS CLARIFICATION** (not pinned in constitution/spec; this plan
-assumes **3.13** as the default; see Flagged Underspecifications #1). Frontend: TypeScript + React + Vite.
+**Language/Version**: Python **3.13** (confirmed; `requires-python = ">=3.13"`, single-version CI).
+Frontend: TypeScript + React + Vite.
 
 **Primary Dependencies**: FastAPI, uvicorn (uvloop + httptools), SQLAlchemy 2.0, asyncpg (API engine),
 psycopg v3 (worker engine), Pydantic v2 + pydantic-settings, Alembic, Celery + RabbitMQ (kombu),
 structlog, OpenTelemetry SDK, sentry-sdk. Tooling: uv, ruff, mypy, pre-commit. Tests: pytest,
-pytest-asyncio, httpx.AsyncClient, Testcontainers (Postgres **and** RabbitMQ — see Flagged #2), respx,
-coverage/Coveralls.
+pytest-asyncio, httpx.AsyncClient, Testcontainers (Postgres **and** RabbitMQ, per constitution v1.2.0),
+respx, coverage/Coveralls.
 
 **Storage**: PostgreSQL. One Alembic-managed table for this slice: `liveness_completion` (the smoke
 check's correlation-keyed completion record). Written by workers via the sync engine; read by the API
@@ -70,7 +70,7 @@ smoke CLI, 1 minimal frontend page. No channels, auth, or analytics (explicitly 
 | II | Architecture (hexagonal, proportionate, open/closed) | ✅ PASS | Domain `ReadinessReport`/`SubsystemCheckResult` are framework-free; `BrokerProbe`/`WorkerProbe`/repository **ports** isolate I/O; adapters under `adapters/`. No channel code yet (out of scope) — extension points respected, nothing in the dispatch core to edit. |
 | III | Background Processing (Celery, mixed workload, sync seam) | ✅ PASS | Celery + RabbitMQ; `cpu` queue → prefork, `io` queue → threads; workers use the **sync psycopg v3** engine, API uses **asyncpg**; `ignore_result=True`. |
 | IV | Resilience (first-class) | ✅ PASS (scoped) | This slice models the liveness round-trip + bounded/timeout checks; full retry/backoff/circuit-breaker belongs to the channel features (out of scope) — no resilience code is removed or precluded. |
-| V | Testing (real Postgres, mocked HTTP, non-negotiable) | ✅ PASS | Real Postgres via Testcontainers, no DB mocking; real broker for the smoke check; respx reserved for external HTTP; coverage → Coveralls. **Extends** Testcontainers to RabbitMQ (Flagged #2). |
+| V | Testing (real Postgres, mocked HTTP, non-negotiable) | ✅ PASS | Real Postgres via Testcontainers, no DB mocking; real broker for the smoke check; respx reserved for external HTTP; coverage → Coveralls. Per constitution v1.2.0, Testcontainers covers Postgres + RabbitMQ (real broker, no eager mode). |
 | VI | Security (tokens, hashing, secrets) | ✅ PASS (scoped) | No auth in this slice (spec out-of-scope); secrets via env only; no secrets in code. |
 | VII | Operations (Docker, GH Actions, one process model/env) | ✅ PASS | `docker compose up` (dev); k8s single-uvicorn pods (prod) with `/livez`+`/readyz`; CI+CD via GitHub Actions; Alembic migration ships with the model. |
 
@@ -167,15 +167,16 @@ in `cli/`. The dual-engine seam is explicit: `async_repo.py`/`async_engine.py` (
 
 ## Flagged Underspecifications
 
-Per the request to flag rather than invent. Items 1–2 want a human decision; 3–5 are plan-level
-defaults I have chosen (documented in research.md) and noted here for visibility.
+Per the request to flag rather than invent. Items 1–2 were escalated and are now **resolved**
+(2026-06-20); 3–5 are plan-level defaults I chose (documented in research.md) and noted for visibility.
 
-1. **Python version** — not pinned in constitution or spec. **Assumed 3.13.** Confirm or override; it
-   pins `requires-python` and CI matrix. *(Blocks nothing; easy to change before tasks.)*
-2. **RabbitMQ in the test suite** — the constitution names Testcontainers only for **Postgres**, but
-   the spec's smoke check requires a *real broker → real worker* round-trip (no mocks). **Plan adds a
-   RabbitMQ Testcontainer** + in-test worker processes for the smoke test only. Confirm this extension
-   of the testing approach (alternative: a dedicated CI broker service).
+1. **Python version** — ✅ RESOLVED (2026-06-20): **Python 3.13** confirmed
+   (`requires-python = ">=3.13"`, single-version CI).
+2. **RabbitMQ in the test suite** — ✅ RESOLVED (2026-06-20): confirmed — **RabbitMQ Testcontainer +
+   in-test workers** for the smoke e2e, and the **constitution (v1.2.0) now mandates Testcontainers for
+   both Postgres and RabbitMQ**. The in-test worker fixture starts **both** the `cpu` and `io` pools,
+   since readiness pings both. Cleanup is by truncation (cross-process writes are not covered by
+   transaction rollback).
 3. **Smoke-check invocation surface** — spec deferred to planning. **Decided: a CLI/management command**
    (`python -m app.cli.smoke`, also a console script) — *not* a public HTTP endpoint (avoids exposing a
    job-triggering surface). CI/deploy invoke it; an integration test drives the same use case.
