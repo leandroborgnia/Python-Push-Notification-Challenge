@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     environment: str = "dev"
 
     # Bounded timeouts (seconds).
-    readiness_check_timeout_s: float = 2.0  # per-subsystem bound; aggregate stays < 5s (SC-004)
+    readiness_check_timeout_s: float = 2.0  # aggregate per-check hard bound; < 5s (SC-004)
+    worker_ping_timeout_s: float = 0.8  # control.ping window; < check bound and < 1s (SC-005)
     readiness_normal_budget_s: float = 1.0  # normal-case target (SC-005)
     smoke_timeout_s: float = 10.0  # smoke round-trip bound (SC-007)
 

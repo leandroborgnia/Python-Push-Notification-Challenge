@@ -27,7 +27,7 @@ def build_container() -> Container:
 
     data_store = AsyncDataStoreProbe(session_factory)
     broker = CeleryBrokerProbe(celery_app, settings.readiness_check_timeout_s)
-    worker = CeleryWorkerProbe(celery_app, settings.readiness_check_timeout_s)
+    worker = CeleryWorkerProbe(celery_app, settings.worker_ping_timeout_s)
 
     return Container(
         settings=settings,

@@ -5,12 +5,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+_RABBITMQ_CONF = (
+    Path(__file__).resolve().parents[2] / "deploy" / "rabbitmq" / "permit-deprecated.conf"
+)
 
 # Worker pool per platform: Celery prefork doesn't run on Windows, so use solo locally;
 # CI (Linux) uses the production pool types. Routing + the sync/async seam are what these
@@ -45,9 +50,12 @@ def container_urls() -> Iterator[tuple[str, str, str]]:
     from testcontainers.postgres import PostgresContainer
     from testcontainers.rabbitmq import RabbitMqContainer
 
+    rabbitmq = RabbitMqContainer("rabbitmq:4-alpine").with_volume_mapping(
+        str(_RABBITMQ_CONF), "/etc/rabbitmq/conf.d/10-permit-deprecated.conf", "ro"
+    )
     with (
         PostgresContainer("postgres:16-alpine") as pg,
-        RabbitMqContainer("rabbitmq:4-alpine") as mq,
+        rabbitmq as mq,
     ):
         base = pg.get_connection_url()  # postgresql+psycopg2://user:pass@host:port/db
         sync_url = base.replace("+psycopg2", "+psycopg")

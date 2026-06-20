@@ -10,17 +10,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
-def _force_tracer_provider(provider: TracerProvider) -> None:
-    # Reset OpenTelemetry's set-once guard so the test can install its own provider
-    # regardless of test ordering.
-    import opentelemetry.trace as trace_api
-    from opentelemetry.util._once import Once
-
-    trace_api._TRACER_PROVIDER_SET_ONCE = Once()
-    trace_api._TRACER_PROVIDER = None
-    trace.set_tracer_provider(provider)
-
-
 def test_structured_startup_log_emitted(capsys, monkeypatch):
     import app.infra.telemetry as telemetry
 
@@ -31,7 +20,7 @@ def test_structured_startup_log_emitted(capsys, monkeypatch):
         line for line in capsys.readouterr().out.splitlines() if "telemetry_initialized" in line
     ]
     assert lines, "no structured startup log line emitted"
-    record = json.loads(lines[-1])  # structured = valid JSON
+    record = json.loads(lines[-1])  # structured == valid JSON
     assert record["event"] == "telemetry_initialized"
     assert record["level"] == "info"
 
@@ -48,13 +37,17 @@ def test_error_reporting_client_initialized(monkeypatch):
 
 
 def test_trace_span_recorded_for_readiness_request(monkeypatch):
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    _force_tracer_provider(provider)
+    import app.infra.telemetry as telemetry
 
-    # Point at an unreachable DB/broker so /health returns promptly (503) without Docker;
-    # the span must still be recorded.
+    # Ensure a real SDK TracerProvider is installed, then attach an in-memory exporter to it.
+    # Works regardless of test ordering — the router's tracer forwards to the global provider.
+    telemetry.init_telemetry()
+    provider = trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    # Unreachable DB/broker → /health returns promptly (503); the span must still be recorded.
     monkeypatch.setenv("DATABASE_URL_ASYNC", "postgresql+asyncpg://app:app@127.0.0.1:1/app")
     monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql+psycopg://app:app@127.0.0.1:1/app")
     monkeypatch.setenv("BROKER_URL", "amqp://guest:guest@127.0.0.1:1//")
@@ -72,5 +65,4 @@ def test_trace_span_recorded_for_readiness_request(monkeypatch):
     with TestClient(create_app()) as client:
         client.get("/health")
 
-    span_names = {span.name for span in exporter.get_finished_spans()}
-    assert "health.aggregate" in span_names
+    assert "health.aggregate" in {span.name for span in exporter.get_finished_spans()}

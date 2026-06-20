@@ -14,8 +14,8 @@ def test_health_200_all_healthy_with_both_pools(app, both_pool_workers):
         response = client.get("/health")
         elapsed = time.perf_counter() - start
 
-        assert response.status_code == 200
         body = response.json()
+        assert response.status_code == 200, body
         assert body["status"] == "healthy"
         passed = {check["name"]: check["passed"] for check in body["checks"]}
         assert passed == {
