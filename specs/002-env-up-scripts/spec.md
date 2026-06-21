@@ -12,8 +12,14 @@
 
 ### Session 2026-06-21
 
-- Q: `up-dev` should use Kubernetes like prod — what happens to the `docker compose` dev stack? → A: **Kubernetes-only dev.** Both `up-dev` and `up-prod` deploy to Kubernetes (dev → a **local** cluster: kind / minikube / Docker Desktop; prod → the production cluster). `docker compose` is **retired** as the dev orchestrator; this feature supersedes feature 001's compose-based dev bring-up. (Constitution amended to v1.5.0.)
+- Q: `up-dev` should use Kubernetes like prod — what happens to the `docker compose` dev stack? → A: **Kubernetes-only dev.** Both `up-dev` and `up-prod` deploy to Kubernetes (dev → a **local** cluster; prod → the production cluster). `docker compose` is **retired** as the dev orchestrator; this feature supersedes feature 001's compose-based dev bring-up. (Constitution amended to v1.5.0.)
 - Q: Multi-stage image — which runtime base? → A: **Slim, keep the pin.** A multi-stage build (build stage compiles dependencies; runtime stage = `python:3.13.14-slim`, pinned by patch + digest) — *not* distroless, so the Python 3.13.14 pin and a shell are preserved. Schema migrations move out of the API start command into a **Kubernetes init container** (best practice for replicas; required by constitution v1.5.0).
+- Q: What does each environment deploy (workloads + datastores)? → A: **Dev = full stack in-cluster** — API + cpu-worker + io-worker + Postgres + RabbitMQ as in-cluster workloads. **Prod = app only** — API + cpu/io workers, configured to use **managed/external** Postgres + RabbitMQ (not in-cluster). So the manifests expand beyond 001's API-only set to add worker Deployments and (dev only) Postgres + RabbitMQ workloads.
+- Q: How are manifests structured/parametrized per environment? → A: **Kustomize.** A shared `deploy/k8s/base` (API + cpu/io workers + migration init container) with `overlays/dev` (adds in-cluster Postgres + RabbitMQ + dev config) and `overlays/prod` (managed-datastore config, replica counts, image tag). The scripts apply with `kubectl apply -k deploy/k8s/overlays/<env>` — no extra tooling beyond `kubectl`.
+- Q: Dev local cluster + how does the image reach it? → A: **kind.** `up-dev` runs `docker build` then `kind load docker-image` into the local kind cluster (so the same script is CI-runnable). `up-prod` builds and **pushes to a configured container registry**, then applies. Manifests reference the immutable per-run image tag.
+- Q: Is the frontend part of the Kubernetes deploy? → A: **Yes, in-cluster in both environments.** The frontend ships as its own **multi-stage** image (Node build → static assets served by a lightweight web server, e.g. nginx) with a Deployment/Service; `up-dev`/`up-prod` deploy it alongside the API. Local `npm run dev` remains available for fast HMR against the in-cluster API.
+- Q: How does a developer reach the app in the cluster? → A: **Ingress in both environments.** The manifests define Ingress resources (host routes for the frontend + API). `up-dev` installs the ingress controller (ingress-nginx) into the kind cluster and creates the cluster with host port-mappings, so the app is reachable at `http://localhost` — all in-cluster containers managed by the script, **nothing installed on the developer's machine**. Prod uses the production cluster's existing ingress controller / load balancer. (Supersedes an earlier port-forward answer, which was based on a misread of "install".)
+- Q: Should `up-dev` create the kind cluster if missing? → A: **Yes, auto-create (idempotent).** `up-dev` creates the local kind cluster if absent and reuses it if present, so the only cluster prerequisite for dev is that `kind` is installed. `up-prod` never creates/destroys clusters — it targets the existing production cluster context.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -92,6 +98,8 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   message, non-zero exit.
 - **No reachable cluster / wrong kube-context** → the script fails fast with a clear message and
   non-zero exit (it must not apply to the wrong cluster).
+- **Prod managed-datastore config missing** → `up-prod` fails fast — there is no in-cluster
+  Postgres/RabbitMQ fallback in prod; it must not deploy an app that cannot reach its data layer.
 - **Image build fails / build prerequisites missing** → the script stops before applying manifests.
 - **Migration init container fails** → the API workload does not start; the script surfaces the failure
   and exits non-zero (no half-migrated, serving state).
@@ -120,7 +128,8 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 - **FR-007**: Every script MUST operate against the repository root regardless of the caller's CWD.
 - **FR-008**: Every script MUST exit `0` on success and non-zero on failure (usable in automation/CI).
 - **FR-009**: Every script MUST fail fast with a clear, actionable message when a prerequisite is
-  missing (WSL for the wrappers; reachable kube-context/`kubectl` for the deploy; image build tooling).
+  missing (WSL for the wrappers; `kind` / `kubectl` / Docker installed; a reachable **prod** cluster
+  context for `up-prod`).
 - **FR-010**: The bash scripts MUST use LF line endings (enforced via `.gitattributes`) so they execute
   correctly under WSL/Linux even on a Windows checkout.
 - **FR-011**: Re-running a script MUST be safe (idempotent) — a declarative apply MUST NOT corrupt or
@@ -134,6 +143,27 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   API serves traffic — NOT from the API container's start command — so replicas never race to migrate.
 - **FR-015**: This feature MUST retire `docker compose` as the dev orchestrator (superseding feature
   001's compose-based bring-up) and update the operating manual / dev docs accordingly.
+- **FR-016**: The Kubernetes manifests MUST cover all app workloads — API, **cpu** worker, **io**
+  worker (separate Deployments with pool-identifying nodenames), and the **frontend** (its own
+  multi-stage image: Node build → static assets served by a lightweight web server such as nginx;
+  Deployment + Service). The **dev** configuration MUST additionally deploy **in-cluster Postgres +
+  RabbitMQ**; the **prod** configuration MUST omit those and wire the app to **managed/external**
+  Postgres + RabbitMQ via secrets/config, failing fast if that connection configuration is absent.
+- **FR-017**: The manifests MUST be organized with **Kustomize** — a shared `deploy/k8s/base` plus
+  `overlays/dev` and `overlays/prod`; `up-dev`/`up-prod` MUST deploy via
+  `kubectl apply -k deploy/k8s/overlays/<env>` (no tooling beyond `kubectl`).
+- **FR-018**: `up-dev` MUST build the image and load it into a local **kind** cluster
+  (`kind load docker-image`); `up-prod` MUST build and push the image to a configured container
+  registry before applying. Manifests MUST reference the immutable per-run tag (no `latest`).
+- **FR-019**: The app MUST be reachable via **Ingress** in both environments — the manifests define
+  Ingress resources routing to the frontend and API. `up-dev` MUST ensure an ingress controller
+  (ingress-nginx) is installed in the kind cluster so the app is reachable at `http://localhost`
+  (in-cluster containers managed by the script; nothing installed on the developer's machine). **Prod**
+  relies on the production cluster's ingress controller / load balancer.
+- **FR-020**: `up-dev` MUST ensure the local **kind** cluster exists — creating it if absent (with the
+  host port-mappings the ingress controller needs), reusing it if present (idempotent) — so the only
+  cluster prerequisite for dev is that `kind` is installed.
+  `up-prod` MUST NOT create or destroy clusters; it targets the existing production cluster context.
 
 ## Success Criteria *(mandatory)*
 
@@ -155,15 +185,22 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 
 ## Assumptions
 
-- **"dev environment"** = the application deployed to a **local Kubernetes cluster** (kind / minikube /
-  Docker Desktop Kubernetes). **"prod environment"** = the application deployed to the **production
+- **"dev environment"** = the application deployed to a **local kind cluster**. **"prod environment"** =
+  the application deployed to the **production
   cluster**. Both use the project's Kubernetes manifests with per-environment configuration/overlays.
-- A reachable **kube-context per environment** and a working `kubectl` are prerequisites; the scripts do
-  **not** provision clusters. Windows developers have **WSL + a Linux distro** (with `kubectl`/build
-  tooling) available; the wrappers target `wsl.exe`.
+- **Datastores**: dev runs Postgres + RabbitMQ **in-cluster** (ephemeral local data is acceptable); prod
+  uses **managed/external** Postgres + RabbitMQ supplied via secrets/config (provisioning those managed
+  services is out of scope).
+- **Image delivery**: dev builds + `kind load`s the image into the local cluster; prod builds + pushes to
+  a configured container registry (registry + credentials supplied via config — provisioning the
+  registry is out of scope).
+- A working `kubectl` (plus `kind` + Docker for dev) is required. `up-dev` **creates the local kind
+  cluster if missing**; `up-prod` targets an **existing** production cluster context (it does not
+  provision prod). Windows developers have **WSL + a Linux distro** (with `kubectl` / `kind` / Docker on
+  PATH) available; the wrappers target `wsl.exe`.
 - Script layout matches the requested shape — bash scripts under `scripts/` and PowerShell wrappers at
-  the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`); exact paths and the manifest
-  overlay mechanism (e.g., kustomize) are finalized in planning.
+  the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`). Per-environment manifests use
+  **Kustomize** (`deploy/k8s/base` + `overlays/{dev,prod}`, applied via `kubectl apply -k`).
 - This feature reworks existing artifacts to match constitution v1.5.0: `backend/Dockerfile` becomes
   multi-stage (slim runtime), `deploy/k8s/` gains a dev overlay + a migration init container, and
   `docker-compose.yml` + the compose-based dev docs (CLAUDE.md, 001 quickstart) are retired/updated.
