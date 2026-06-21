@@ -36,5 +36,7 @@
   dev/prod orchestrators, so naming bash / PowerShell / `wsl.exe` / Docker / Kubernetes describes the
   required behavior, not premature/incidental tech leakage (same stance as feature 001). The HOW of
   each script (exact commands, flags) is deferred to `/speckit.plan`.
-- One assumption is flagged for confirmation: what **`up-prod`** brings up (apply the `deploy/k8s/`
-  manifests vs. a production-like local run). Run `/speckit.clarify` if it is not the former.
+- Resolved in the Clarifications (Session 2026-06-21): **both** `up-dev` and `up-prod` deploy to
+  Kubernetes (dev → local cluster, prod → prod cluster); `docker compose` is retired; the image is a
+  multi-stage build with a `python:3.13.14-slim` runtime; migrations move to a k8s init container.
+  Constitution amended to v1.5.0 accordingly — no open ambiguities remain.

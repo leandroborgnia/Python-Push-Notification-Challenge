@@ -8,47 +8,58 @@
 
 **Input**: User description: "we need 2 sh scripts, up-dev and up-prod that switch on each environment, also 2 more ps1 scripts up-dev and up-prod that call their respective up-xxx.sh through wsl.exe"
 
+## Clarifications
+
+### Session 2026-06-21
+
+- Q: `up-dev` should use Kubernetes like prod — what happens to the `docker compose` dev stack? → A: **Kubernetes-only dev.** Both `up-dev` and `up-prod` deploy to Kubernetes (dev → a **local** cluster: kind / minikube / Docker Desktop; prod → the production cluster). `docker compose` is **retired** as the dev orchestrator; this feature supersedes feature 001's compose-based dev bring-up. (Constitution amended to v1.5.0.)
+- Q: Multi-stage image — which runtime base? → A: **Slim, keep the pin.** A multi-stage build (build stage compiles dependencies; runtime stage = `python:3.13.14-slim`, pinned by patch + digest) — *not* distroless, so the Python 3.13.14 pin and a shell are preserved. Schema migrations move out of the API start command into a **Kubernetes init container** (best practice for replicas; required by constitution v1.5.0).
+
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - One-command dev bring-up (Priority: P1)
+### User Story 1 - One-command dev bring-up on Kubernetes (Priority: P1)
 
-As a developer, I can start the entire **dev** environment with a single command and have every
-service come up healthy — without remembering the underlying orchestration commands.
+As a developer, I can stand up the entire **dev** environment on my **local Kubernetes cluster** with a
+single command and have every workload come up healthy — without remembering the underlying `kubectl`
+/ build steps.
 
-**Why this priority**: Day-to-day work depends on a fast, reliable, memorable way to start the local
-stack. This is the script most people run most often, so it delivers the most value first.
+**Why this priority**: This is the everyday entrypoint and the one that gives dev/prod parity (same
+orchestrator as prod). It delivers the most value first.
 
-**Independent Test**: From a clean checkout, run the dev bring-up entrypoint (the `.ps1` on Windows or
-the `.sh` directly on Linux) and confirm every service reaches a healthy state with no manual steps.
+**Independent Test**: From a clean checkout against a running local cluster, run the dev bring-up
+entrypoint (the `.ps1` on Windows or the `.sh` directly on Linux) and confirm all workloads reach a
+healthy/ready state with no manual steps.
 
 **Acceptance Scenarios**:
 
-1. **Given** a clean checkout on Windows, **When** the developer runs `up-dev.ps1`, **Then** the full
-   local dev stack starts and every service reports healthy, with no additional manual commands.
-2. **Given** a clean checkout on Linux/CI, **When** the developer runs `scripts/up-dev.sh`, **Then**
-   the same stack comes up with identical behavior.
-3. **Given** the dev stack is already running, **When** the script is run again, **Then** it completes
-   safely (idempotent) without corrupting the running environment.
+1. **Given** a running local cluster and a clean checkout on Windows, **When** the developer runs
+   `up-dev.ps1`, **Then** the app image is built and the dev manifests are applied, and every workload
+   reaches Ready with no additional manual commands.
+2. **Given** the same on Linux/CI, **When** the developer runs `scripts/up-dev.sh`, **Then** the bring-up
+   behaves identically.
+3. **Given** the dev environment is already deployed, **When** the script is run again, **Then** it
+   completes safely (idempotent — declarative apply) without corrupting the running environment.
 
 ---
 
-### User Story 2 - One-command prod bring-up (Priority: P2)
+### User Story 2 - One-command prod bring-up on Kubernetes (Priority: P2)
 
-As an operator/developer, I can bring up the **prod** environment with a single command that targets
-the production deployment path (not the local container stack).
+As an operator/developer, I can deploy the **prod** environment to the **production cluster** with a
+single command.
 
-**Why this priority**: A matching prod entrypoint gives parity with dev and a single, documented way
-to stand up the production topology; it is used less often than dev, hence P2.
+**Why this priority**: A matching prod entrypoint gives a single, documented way to deploy the
+production topology; used less often than dev, hence P2.
 
-**Independent Test**: Run the prod bring-up entrypoint against a configured target and confirm it
-applies the production topology and reports success or failure via its exit code.
+**Independent Test**: Run the prod bring-up entrypoint against the production context and confirm it
+applies the production topology and reports rollout success/failure via its exit code.
 
 **Acceptance Scenarios**:
 
-1. **Given** a configured production target, **When** the operator runs `up-prod.ps1` (or
-   `scripts/up-prod.sh`), **Then** the production deployment is applied and the command reports success.
-2. **Given** the production target is unreachable/misconfigured, **When** the script runs, **Then** it
-   fails fast with a clear message and a non-zero exit code (it does not partially proceed silently).
+1. **Given** a configured production cluster context, **When** the operator runs `up-prod.ps1` (or
+   `scripts/up-prod.sh`), **Then** the production manifests are applied with prod configuration and the
+   command reports rollout success.
+2. **Given** the production context is unreachable/misconfigured, **When** the script runs, **Then** it
+   fails fast with a clear message and a non-zero exit code (no silent partial apply).
 
 ---
 
@@ -57,105 +68,114 @@ applies the production topology and reports success or failure via its exit code
 As a developer on Windows, I can run the same logic my Linux/CI/container teammates run, because the
 PowerShell entrypoints are **thin wrappers** that invoke the canonical bash scripts through `wsl.exe`.
 
-**Why this priority**: Single-sourcing the logic in bash guarantees the behavior I test on Windows is
-the behavior that runs in CI, containers, and prod (all Linux). It is a correctness/maintainability
-property layered on top of US1/US2.
+**Why this priority**: Single-sourcing logic in bash guarantees the behavior tested on Windows is the
+behavior that runs in CI, containers, and prod (all Linux). A correctness/maintainability property on
+top of US1/US2.
 
-**Independent Test**: Inspect the wrappers (they contain only the WSL invocation, no orchestration
-logic), then confirm arguments pass through and the bash script's exit code is propagated back to
-PowerShell.
+**Independent Test**: Inspect the wrappers (only the WSL invocation, no orchestration logic), then
+confirm arguments pass through and the bash script's exit code is propagated back to PowerShell.
 
 **Acceptance Scenarios**:
 
-1. **Given** `up-dev.ps1`/`up-prod.ps1`, **When** they are reviewed, **Then** they contain no
-   orchestration logic — only the `wsl.exe` call to the matching `.sh` — so logic exists in exactly one
-   place.
-2. **Given** a wrapper is invoked with extra arguments, **When** it runs, **Then** those arguments are
+1. **Given** `up-dev.ps1`/`up-prod.ps1`, **When** reviewed, **Then** they contain no orchestration
+   logic — only the `wsl.exe` call to the matching `.sh` — so logic exists in exactly one place.
+2. **Given** a wrapper invoked with extra arguments, **When** it runs, **Then** those arguments are
    forwarded unchanged to the bash script.
-3. **Given** the bash script exits non-zero, **When** the wrapper finishes, **Then** PowerShell also
-   returns that non-zero exit code (failures are not masked).
+3. **Given** the bash script exits non-zero, **When** the wrapper finishes, **Then** PowerShell returns
+   that same non-zero exit code (failures are not masked).
 
 ---
 
 ### Edge Cases
 
 - **WSL not installed/configured** on Windows → the `.ps1` wrapper fails fast with an actionable
-  message (how to enable WSL), non-zero exit.
-- **Docker daemon not running** → `up-dev` fails fast with a clear message rather than hanging.
-- **Cluster/kubeconfig unreachable** → `up-prod` fails fast with a clear message, non-zero exit.
-- **Script invoked from a subdirectory** → it still operates against the repository root, not the
-  caller's current directory.
+  message, non-zero exit.
+- **No reachable cluster / wrong kube-context** → the script fails fast with a clear message and
+  non-zero exit (it must not apply to the wrong cluster).
+- **Image build fails / build prerequisites missing** → the script stops before applying manifests.
+- **Migration init container fails** → the API workload does not start; the script surfaces the failure
+  and exits non-zero (no half-migrated, serving state).
+- **Script invoked from a subdirectory** → it still operates against the repository root.
 - **Windows line endings (CRLF)** on the `.sh` files → would break execution under WSL/bash; the bash
   scripts MUST remain LF so a Windows checkout still runs them correctly.
-- **Re-run while already up** → safe/idempotent; no duplicate or corrupted state.
+- **Re-run while already deployed** → safe/idempotent (declarative apply); no duplicate/corrupted state.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The project MUST provide an executable `up-dev` bash script that brings up the complete
-  local **dev** environment in a single command.
-- **FR-002**: The project MUST provide an executable `up-prod` bash script that brings up/deploys the
-  **prod** environment in a single command.
-- **FR-003**: Each script MUST target its environment's orchestration and apply environment-appropriate
-  configuration — dev uses the local container stack; prod uses the production deployment path.
+- **FR-001**: The project MUST provide an executable `up-dev` bash script that, in a single command,
+  builds the app image and deploys the full application to a **local Kubernetes cluster** (dev config).
+- **FR-002**: The project MUST provide an executable `up-prod` bash script that, in a single command,
+  deploys the application to the **production Kubernetes cluster** (prod config).
+- **FR-003**: Each script MUST target its environment's cluster context and apply environment-specific
+  configuration (context/namespace, image tag, replica count, secrets source) via the project's
+  Kubernetes manifests/overlays.
 - **FR-004**: The project MUST provide `up-dev.ps1` and `up-prod.ps1` Windows entrypoints that invoke
   their corresponding bash script via `wsl.exe`.
 - **FR-005**: The PowerShell entrypoints MUST be **thin wrappers** containing no orchestration logic;
   all logic lives in the bash scripts (single source of truth → dev/CI/container/prod parity).
 - **FR-006**: The wrappers MUST forward any passed arguments to the bash script and MUST propagate the
   bash script's exit code back to the caller.
-- **FR-007**: Every script MUST operate against the repository root regardless of the caller's current
-  working directory.
-- **FR-008**: Every script MUST exit `0` on success and non-zero on failure, so it is usable in
-  automation/CI.
-- **FR-009**: Every script MUST fail fast with a clear, actionable message when a required prerequisite
-  is missing (Docker for dev; WSL for the wrappers; reachable cluster/kubeconfig for prod).
-- **FR-010**: The bash scripts MUST use LF line endings (enforced via repository configuration, e.g.
-  `.gitattributes`) so they execute correctly under WSL/Linux even on a Windows checkout.
-- **FR-011**: Re-running a script MUST be safe (idempotent): bringing an already-up environment up
-  again MUST NOT corrupt or duplicate state.
-- **FR-012**: The dev script MUST surface readiness — report that the stack reached a healthy state, or
-  report which service failed.
+- **FR-007**: Every script MUST operate against the repository root regardless of the caller's CWD.
+- **FR-008**: Every script MUST exit `0` on success and non-zero on failure (usable in automation/CI).
+- **FR-009**: Every script MUST fail fast with a clear, actionable message when a prerequisite is
+  missing (WSL for the wrappers; reachable kube-context/`kubectl` for the deploy; image build tooling).
+- **FR-010**: The bash scripts MUST use LF line endings (enforced via `.gitattributes`) so they execute
+  correctly under WSL/Linux even on a Windows checkout.
+- **FR-011**: Re-running a script MUST be safe (idempotent) — a declarative apply MUST NOT corrupt or
+  duplicate state.
+- **FR-012**: The scripts MUST surface readiness — wait for / report rollout success, or report which
+  workload failed.
+- **FR-013**: The application container image MUST be built **multi-stage** — a build stage (toolchain +
+  dependency compilation) separate from a minimal runtime stage based on `python:3.13.14-slim` (pinned
+  patch version + digest), carrying no build tools.
+- **FR-014**: Schema migrations MUST run as a **Kubernetes init container** (or one-shot Job) before the
+  API serves traffic — NOT from the API container's start command — so replicas never race to migrate.
+- **FR-015**: This feature MUST retire `docker compose` as the dev orchestrator (superseding feature
+  001's compose-based bring-up) and update the operating manual / dev docs accordingly.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: From a clean checkout on Windows, a developer brings the full dev stack to healthy with a
-  single command and zero manual follow-up steps.
+- **SC-001**: From a clean checkout on Windows (with a running local cluster), a developer brings the
+  full dev environment to Ready with a single command and zero manual follow-up steps.
 - **SC-002**: The same dev bash script runs unchanged on Linux/CI and yields the same result (parity).
-- **SC-003**: `up-prod` applies the production topology and reports success/failure via its exit code in
-  100% of runs.
+- **SC-003**: `up-prod` applies the production topology and reports rollout success/failure via its exit
+  code in 100% of runs.
 - **SC-004**: 100% of orchestration logic resides in the bash scripts; each PowerShell wrapper contains
   only the WSL invocation (a handful of lines, no environment logic).
-- **SC-005**: A missing prerequisite produces a clear error and a non-zero exit within 10 seconds (no
-  hanging).
-- **SC-006**: Running any script from a subdirectory behaves identically to running it from the repo
-  root.
+- **SC-005**: A missing prerequisite (no WSL / no cluster / failed build) produces a clear error and a
+  non-zero exit within 10 seconds (no hanging).
+- **SC-006**: The runtime image contains **no build toolchain** (e.g., `uv` is absent) and is materially
+  smaller than an equivalent single-stage image.
+- **SC-007**: Migrations execute exactly **once per deploy** (init container/Job), never once-per-replica.
+- **SC-008**: Running any script from a subdirectory behaves identically to running it from the repo root.
 
 ## Assumptions
 
-- **"dev environment"** = the project's documented local container stack (today: `docker compose up`).
-- **"prod environment"** = the project's Kubernetes deployment; `up-prod` applies the existing
-  `deploy/k8s/` manifests to the currently-configured cluster context (consistent with the
-  constitution's prod = Kubernetes). *This is the one assumption worth confirming — the alternative
-  reading is "run a production-like stack locally"; resolve via `/speckit.clarify` if that's intended.*
-- Windows developers have **WSL with a Linux distribution + bash** available; the wrappers target
-  `wsl.exe`. Docker (dev) and a reachable cluster/kubeconfig (prod) are **prerequisites**, not
-  provisioned by these scripts.
+- **"dev environment"** = the application deployed to a **local Kubernetes cluster** (kind / minikube /
+  Docker Desktop Kubernetes). **"prod environment"** = the application deployed to the **production
+  cluster**. Both use the project's Kubernetes manifests with per-environment configuration/overlays.
+- A reachable **kube-context per environment** and a working `kubectl` are prerequisites; the scripts do
+  **not** provision clusters. Windows developers have **WSL + a Linux distro** (with `kubectl`/build
+  tooling) available; the wrappers target `wsl.exe`.
 - Script layout matches the requested shape — bash scripts under `scripts/` and PowerShell wrappers at
-  the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`); exact paths finalized in
-  planning.
-- This feature aligns with the constitution's Operations environments (dev = Docker, prod = Kubernetes);
-  the "bash-canonical + thin PowerShell wrapper" convention is new and may optionally be ratified into
-  the constitution separately.
+  the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`); exact paths and the manifest
+  overlay mechanism (e.g., kustomize) are finalized in planning.
+- This feature reworks existing artifacts to match constitution v1.5.0: `backend/Dockerfile` becomes
+  multi-stage (slim runtime), `deploy/k8s/` gains a dev overlay + a migration init container, and
+  `docker-compose.yml` + the compose-based dev docs (CLAUDE.md, 001 quickstart) are retired/updated.
+- Aligns with the constitution's Operations principle (dev + prod on Kubernetes; multi-stage images;
+  migrations as an init container). The "bash-canonical + thin PowerShell wrapper" convention is the
+  new project standard introduced here.
 
 ## Out of Scope
 
-- Provisioning Docker, WSL, or the Kubernetes cluster themselves.
-- Changes to the CI/CD pipeline (GitHub Actions already builds/deploys prod; these are
-  developer/operator-invoked local entrypoints).
+- Provisioning the Kubernetes clusters, WSL, or `kubectl` themselves.
+- The CI/CD pipeline internals (CD already deploys prod via GitHub Actions; it MAY later reuse these
+  manifests, but pipeline changes are not part of this feature).
 - Environments other than `dev` and `prod`.
 - Tear-down / `down` scripts (only bring-up is requested).
-- Application code, migration contents, or the analytics seed script.
+- Application features, migration contents, or the analytics seed script.

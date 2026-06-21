@@ -70,7 +70,9 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 
 ## Environments
 
-- **dev** — `docker compose up` (full stack, local; single-process uvicorn).
+- **dev** — *migrating to a local Kubernetes cluster* (kind/minikube/Docker Desktop) per constitution
+  v1.5.0, delivered by feature `002-env-up-scripts` (`up-dev`/`up-prod` scripts, multi-stage image,
+  migration init container). Until 002 lands, `docker compose up` remains the working local bring-up.
 - **test** — ephemeral Testcontainers Postgres, created per test run. Not a deployed environment.
 - **prod** — Kubernetes: single-uvicorn pods scaled by replica count.
 - **API process model**: single-process uvicorn everywhere; in prod, Kubernetes scales it by replica
