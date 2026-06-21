@@ -21,12 +21,16 @@ pool → sync-write completion row → async-read) is a **separate on-demand smo
 ## Run it
 
 ```bash
-docker compose up   # api + cpu worker + io worker + postgres + rabbitmq + frontend
+scripts/up-dev.sh   # Windows: ./up-dev.ps1  — builds images + brings the full stack up on kind
 ```
 
-Migrations apply on API start; the frontend renders `/health` at http://localhost:5173. See
-[`specs/001-system-liveness/quickstart.md`](specs/001-system-liveness/quickstart.md) for the full
-validation guide and [CLAUDE.md](CLAUDE.md) for day-to-day commands.
+This builds the multi-stage images, ensures a local **kind** cluster with ingress-nginx, and applies
+the dev overlay (api + cpu worker + io worker + postgres + rabbitmq + frontend). Migrations run once
+per deploy in a `migrate-<tag>` Job — the API waits for the schema before serving. The frontend
+renders `/health` at http://app.localhost. See
+[`specs/002-env-up-scripts/quickstart.md`](specs/002-env-up-scripts/quickstart.md) for the bring-up
+and validation guide, [`specs/001-system-liveness/quickstart.md`](specs/001-system-liveness/quickstart.md)
+for the health-surface walkthrough, and [CLAUDE.md](CLAUDE.md) for day-to-day commands.
 
 ## Why Celery (and not ARQ / TaskIQ)
 
@@ -50,6 +54,8 @@ documented alternative — at the cost of monkey-patching and the associated deb
 ## Layout
 
 `backend/` — FastAPI (hexagonal: `domain/` → `ports/` → `application/`, with `adapters/`, `infra/`,
-`api/`, `tasks/`, `cli/`). `frontend/` — React + Vite. `deploy/k8s/` — Deployment + Service with the
-liveness/readiness probes wired. `.github/workflows/` — CI (ruff, mypy, pytest + Testcontainers,
-Coveralls) and CD (manifest validation + deploy).
+`api/`, `tasks/`, `cli/`). `frontend/` — React + Vite (multi-stage → nginx). `deploy/k8s/` — Kustomize
+`base` + `overlays/{dev,prod}` (API, cpu/io workers, frontend, migrate Job, Ingress) with the
+liveness/readiness probes wired; `scripts/` + root `up-*.ps1` — the bring-up entrypoints.
+`.github/workflows/` — CI (ruff, mypy, pytest + Testcontainers, Coveralls) and CD (manifest
+validation + deploy).

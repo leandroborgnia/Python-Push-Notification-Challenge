@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: io-worker
+  labels:
+    app: io-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: io-worker
+  template:
+    metadata:
+      labels:
+        app: io-worker
+    spec:
+      containers:
+        - name: io-worker
+          image: __API_IMAGE__
+          # I/O-bound sends → threads pool (psycopg3 is natively thread-safe), dedicated `io`
+          # queue, pool-identifying nodename (constitution III).
+          command:
+            - celery
+            - -A
+            - app.tasks.celery_app
+            - worker
+            - --pool=threads
+            - -n
+            - io@%h
+            - -Q
+            - io
+            - -c
+            - "20"
+            - --loglevel=INFO
+          env:
+            - name: DATABASE_URL_SYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-sync
+            - name: BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: broker-url
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A app.tasks.celery_app inspect ping -d "io@$(hostname)" -t 5
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10

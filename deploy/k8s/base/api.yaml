@@ -5,7 +5,8 @@ metadata:
   labels:
     app: notification-api
 spec:
-  replicas: 2
+  # Replicas patched per overlay (dev=1, prod=N).
+  replicas: 1
   selector:
     matchLabels:
       app: notification-api
@@ -14,11 +15,33 @@ spec:
       labels:
         app: notification-api
     spec:
+      # Block startup until the schema is at head. This init container only WAITS (no DDL);
+      # the migration itself runs once per deploy in the migrate-<tag> Job (FR-014, SC-007).
+      initContainers:
+        - name: await-migrations
+          image: __API_IMAGE__
+          workingDir: /app
+          command:
+            - sh
+            - -c
+            - |
+              echo "await-migrations: waiting for schema to reach head...";
+              until alembic current 2>/dev/null | grep -q '(head)'; do
+                echo "await-migrations: schema not at head yet; retrying in 2s";
+                sleep 2;
+              done;
+              echo "await-migrations: schema is at head."
+          env:
+            - name: DATABASE_URL_SYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-sync
       containers:
         - name: api
-          # Pinned default; CD overrides with the immutable git-SHA tag (never :latest).
-          image: notification-service:0.1.0
-          # One uvicorn process per pod; Kubernetes scales via replicas.
+          image: __API_IMAGE__
+          # One uvicorn process per pod; Kubernetes scales via replicas. Migrations are NOT
+          # in this command — they run in the migrate Job (FR-014).
           command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
             - containerPort: 8000
@@ -52,3 +75,18 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-api
+  labels:
+    app: notification-api
+spec:
+  selector:
+    app: notification-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+  type: ClusterIP

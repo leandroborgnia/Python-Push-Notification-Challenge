@@ -13,9 +13,7 @@ import pytest
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-_RABBITMQ_CONF = (
-    Path(__file__).resolve().parents[2] / "deploy" / "rabbitmq" / "permit-deprecated.conf"
-)
+_RABBITMQ_CONF = Path(__file__).resolve().parent / "fixtures" / "permit-deprecated.conf"
 
 # Base images pinned to explicit patch version + digest (constitution Principle I).
 _POSTGRES_IMAGE = (

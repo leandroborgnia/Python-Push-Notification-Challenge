@@ -2,7 +2,8 @@
   "version": "0.2.0",
   "configurations": [
     {
-      // Needs Postgres + RabbitMQ up: `docker compose up postgres rabbitmq`.
+      // Needs Postgres + RabbitMQ on localhost — after `up-dev`, port-forward them, e.g.
+      // `kubectl -n notification port-forward svc/postgres 5432:5432` (and svc/rabbitmq 5672:5672).
       "name": "API: uvicorn --reload",
       "type": "debugpy",
       "request": "launch",
@@ -22,7 +23,7 @@
     },
     {
       // Solo pool = breakpoint-friendly and Windows-safe. Real runs use prefork
-      // via docker compose / the CLAUDE.md worker command.
+      // via up-dev / the CLAUDE.md worker command.
       "name": "Celery: cpu worker (debug, solo)",
       "type": "debugpy",
       "request": "launch",

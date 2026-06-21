@@ -43,17 +43,21 @@ frontend/                    # React + Vite app
 
 ## Commands
 
-`docker compose up` is the orchestration entrypoint — it starts api + cpu worker + io worker +
-postgres + rabbitmq + frontend. The uvicorn/celery lines below are **service entrypoints** (baked
-into the Dockerfile/compose and reused by the k8s manifests), *not* daily hand-run commands.
-Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec api uv run …`).
+`scripts/up-dev.sh` (Windows: `./up-dev.ps1` → WSL) is the dev orchestration entrypoint — it builds
+the images and brings the full stack (api + cpu worker + io worker + postgres + rabbitmq + frontend)
+up on a local **kind** cluster, reachable at `http://app.localhost`. The uvicorn/celery lines below
+are **service entrypoints** (baked into the multi-stage image and reused by the k8s manifests), *not*
+daily hand-run commands. Day-to-day one-offs run on the host with `uv run …` (or
+`kubectl -n notification exec deploy/notification-api -- …`).
 
 | Purpose | Command |
 |---|---|
+| Dev bring-up (kind) | `scripts/up-dev.sh` · Windows: `./up-dev.ps1` |
+| Prod bring-up | `IMAGE_REGISTRY=<registry> scripts/up-prod.sh` · Windows: `./up-prod.ps1` |
 | Install deps | `uv sync` |
 | API (dev) | `uv run uvicorn app.main:app --reload --port 8000` |
 | API (prod, per pod) | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
-| RabbitMQ | `docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:4-management` |
+| Validate k8s manifests | `kubectl kustomize deploy/k8s/overlays/<env> \| kubeconform -strict -summary -` |
 | Celery CPU worker (prefork) | `uv run celery -A app.tasks.celery_app worker --pool=prefork -n cpu@%h -Q cpu -c 4` |
 | Celery I/O worker (threads) | `uv run celery -A app.tasks.celery_app worker --pool=threads -n io@%h -Q io -c 20` |
 | New migration | `uv run alembic revision --autogenerate -m "msg"` |
@@ -65,14 +69,15 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 | Pre-commit (all files) | `uv run pre-commit run --all-files` |
 | Frontend (dev / build) | `npm run dev` / `npm run build` (in `frontend/`) |
 
-> Run `pytest` on the **host** (or in CI), never inside a compose container — Testcontainers needs
+> Run `pytest` on the **host** (or in CI), never inside a cluster pod — Testcontainers needs
 > access to the Docker daemon to spin up its own ephemeral Postgres and RabbitMQ.
 
 ## Environments
 
-- **dev** — *migrating to a local Kubernetes cluster* (kind/minikube/Docker Desktop) per constitution
-  v1.5.0, delivered by feature `002-env-up-scripts` (`up-dev`/`up-prod` scripts, multi-stage image,
-  migration init container). Until 002 lands, `docker compose up` remains the working local bring-up.
+- **dev** — a local **kind** cluster brought up by `scripts/up-dev.sh` / `up-dev.ps1` (constitution
+  v1.5.0, feature `002-env-up-scripts`): multi-stage images, in-cluster Postgres + RabbitMQ, and a
+  one-shot `migrate-<tag>` Job (the API has an init container that waits until the schema is at head).
+  App at `http://app.localhost`. `docker compose` was retired by 002.
 - **test** — ephemeral Testcontainers Postgres, created per test run. Not a deployed environment.
 - **prod** — Kubernetes: single-uvicorn pods scaled by replica count.
 - **API process model**: single-process uvicorn everywhere; in prod, Kubernetes scales it by replica

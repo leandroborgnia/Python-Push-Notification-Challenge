@@ -1,0 +1,29 @@
+# Prod replica counts (strategic-merge; operator-tunable). Workloads scale by replica count —
+# one uvicorn process per API pod, separate worker pods per pool.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-api
+spec:
+  replicas: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: io-worker
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 2

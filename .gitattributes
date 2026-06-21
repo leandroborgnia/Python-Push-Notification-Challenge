@@ -1,0 +1,11 @@
+# Normalize line endings so a Windows checkout still produces runnable artifacts.
+# Default: let Git decide text vs binary and normalize to LF in the repo.
+* text=auto
+
+# Shell scripts MUST be LF even on a Windows checkout so they execute under WSL/bash
+# (CRLF mangles the shebang and commands). This pin is load-bearing for the .ps1 wrappers
+# that call `wsl.exe bash ./scripts/up-*.sh` (FR-010, quickstart Scenario 8).
+*.sh text eol=lf
+
+# PowerShell wrappers stay CRLF on Windows.
+*.ps1 text eol=crlf

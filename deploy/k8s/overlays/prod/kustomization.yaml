@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: notification
+
+# prod consumes the base ONLY — NO in-cluster datastores and NO committed Secret. The managed
+# Postgres/RabbitMQ URLs come from a pre-existing `notification-secrets` (up-prod preflights it;
+# Principle VI, contract K5). Image refs inherit the base __API_IMAGE__/__FRONTEND_IMAGE__
+# placeholders, which up-prod's render_apply substitutes with ${IMAGE_REGISTRY}/...:<sha>
+# (post-render sed — kustomize can't expand ${IMAGE_REGISTRY}; research R3, FR-017).
+resources:
+  - ../../base
+
+patches:
+  # Prod replica counts.
+  - path: replicas-patch.yaml
+  # Configured prod ingress hostnames. PLACEHOLDERS — set these to your real prod hosts
+  # (host provisioning is out of scope per the spec Assumptions).
+  - target:
+      kind: Ingress
+      name: notification
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: app.notification.example.com
+      - op: replace
+        path: /spec/rules/1/host
+        value: api.notification.example.com
