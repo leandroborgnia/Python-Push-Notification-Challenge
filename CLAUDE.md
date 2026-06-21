@@ -70,11 +70,11 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 
 ## Environments
 
-- **dev** — `docker compose up` (full stack, local). Either API process model is fine here.
+- **dev** — `docker compose up` (full stack, local; single-process uvicorn).
 - **test** — ephemeral Testcontainers Postgres, created per test run. Not a deployed environment.
 - **prod** — Kubernetes: single-uvicorn pods scaled by replica count.
-- **Two API start paths, never both in one deployment**: gunicorn-managed uvicorn workers **OR**
-  k8s single-uvicorn pods. Prod uses the latter.
+- **API process model**: single-process uvicorn everywhere; in prod, Kubernetes scales it by replica
+  count (one uvicorn process per pod) — no multi-worker process manager layered on top.
 - **Celery workers are their own processes/services in every environment** — orthogonal to the API
   process model. The cpu (prefork) and io (threads) workers are always separate from the API.
 

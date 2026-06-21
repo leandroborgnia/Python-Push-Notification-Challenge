@@ -1,6 +1,12 @@
 <!--
 SYNC IMPACT REPORT
-Version change: 1.3.0 → 1.3.1  (amendment 2026-06-20)
+Version change: 1.3.1 → 1.4.0  (amendment 2026-06-21)
+Bump rationale (1.4.0): Principle VII simplified — the gunicorn-managed-uvicorn-workers alternative and
+the "one of two process models / never both" rule are removed. The API is now uniformly single-process
+uvicorn, scaled by Kubernetes in prod; gunicorn is dropped project-wide (it was never implemented).
+MINOR (not MAJOR): the change is non-breaking — no deployment ever used gunicorn — and the principle's
+intent (one process model; Kubernetes in prod) is preserved.
+Version change (prior): 1.3.0 → 1.3.1  (amendment 2026-06-20)
 Bump rationale (1.3.1): Pinned-builds rule clarified + strengthened — base images & build tools MUST
 pin the explicit PATCH version (minor-only tags like `python:3.13` are move-to-newest and not
 permitted); digests are now applied to every base image; the deployed image is immutable via a
@@ -33,7 +39,7 @@ Added principles:
   - IV.  Resilience (First-Class — The Core Learning Goal)
   - V.   Testing (Real Postgres, Mocked HTTP, Non-Negotiable)
   - VI.  Security (Tokens, Hashing, Secrets)
-  - VII. Operations (Docker, GitHub Actions, One Process Model per Environment)
+  - VII. Operations (Docker, GitHub Actions, Kubernetes)
 
 Added sections:
   - Technology Stack (Authoritative & Non-Negotiable)
@@ -169,22 +175,20 @@ mocking only the external HTTP boundary keeps the resilience logic under genuine
 **Rationale**: These are the few security choices that are non-negotiable for any credible service;
 fixing the library and hashing decisions up front prevents the common, costly mistakes.
 
-### VII. Operations (Docker, GitHub Actions, One Process Model per Environment)
+### VII. Operations (Docker, GitHub Actions, Kubernetes)
 
 - CI and CD MUST both run on GitHub Actions.
 - The named environments are `dev` and `prod`. Both run in Docker. Tests use Testcontainers, NOT
   the dev/prod compose stack.
-- Exactly ONE API process model is active in a given running deployment — gunicorn-managed uvicorn
-  workers OR a single-uvicorn process scaled by Kubernetes — never both in the same deployment:
-  - **prod**: Kubernetes-scaled single-uvicorn pods (one uvicorn process per pod; Kubernetes
-    performs horizontal scaling; gunicorn is NOT layered on top). CD deploys to this model.
-  - **dev**: either model MAY be used as a developer convenience, but only one at a time.
+- The API MUST run as a single-process uvicorn — no multi-worker process manager layered on top. In
+  **prod**, Kubernetes scales it horizontally by replica count (one uvicorn process per pod); CD
+  deploys this model. In **dev**, the same single-process uvicorn runs via `docker compose`.
 - The ASGI server MUST be uvicorn with uvloop + httptools.
 - Celery workers are SEPARATE processes in every environment, orthogonal to the API process model.
 - Schema changes MUST go through Alembic migrations; manual or out-of-band DDL is forbidden.
 
-**Rationale**: Mixing two process-management strategies in one deployment doubles the failure modes
-for no benefit; pinning one model per environment keeps scaling behavior predictable.
+**Rationale**: A single, uniform process model (uvicorn, scaled by Kubernetes in prod) keeps scaling
+behavior predictable and avoids the failure modes of layering an extra process manager on top.
 
 ## Technology Stack (Authoritative & Non-Negotiable)
 
@@ -238,4 +242,4 @@ proportionate — and keep all of it.
 - Runtime guidance for AI agents lives in `CLAUDE.md`; it MUST be kept consistent with this
   Constitution.
 
-**Version**: 1.3.1 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-20
+**Version**: 1.4.0 | **Ratified**: 2026-06-19 | **Last Amended**: 2026-06-21
