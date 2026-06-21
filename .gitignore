@@ -31,4 +31,10 @@ frontend/build/
 Thumbs.db
 *.swp
 .idea/
-.vscode/
+
+# VS Code: commit shared project config, ignore personal/local files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json

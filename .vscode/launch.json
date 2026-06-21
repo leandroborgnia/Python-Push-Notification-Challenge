@@ -1,0 +1,53 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Needs Postgres + RabbitMQ up: `docker compose up postgres rabbitmq`.
+      "name": "API: uvicorn --reload",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke check (app.cli.smoke)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.cli.smoke",
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal"
+    },
+    {
+      // Solo pool = breakpoint-friendly and Windows-safe. Real runs use prefork
+      // via docker compose / the CLAUDE.md worker command.
+      "name": "Celery: cpu worker (debug, solo)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "celery",
+      "args": ["-A", "app.tasks.celery_app", "worker", "--pool=solo", "-n", "cpu@%h", "-Q", "cpu", "--loglevel=INFO"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Celery: io worker (threads)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "celery",
+      "args": ["-A", "app.tasks.celery_app", "worker", "--pool=threads", "-n", "io@%h", "-Q", "io", "-c", "20", "--loglevel=INFO"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Pytest: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal"
+    }
+  ]
+}
