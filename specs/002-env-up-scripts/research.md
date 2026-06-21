@@ -99,8 +99,10 @@ value defensively lowercased/sanitized for the Job name.
 
 **Decision**: `up-dev` is idempotent over the cluster: `kind get clusters | grep -qx <name>` →
 create only if absent, with a `kind` config that maps host ports **80/443 → the control-plane node**
-and labels it `ingress-ready=true`; then install **ingress-nginx** (the kind-provider manifest) and
-`kubectl wait` for its controller to be Ready before applying app manifests. The image reaches the
+and labels it `ingress-ready=true`; then install **ingress-nginx** from its kind-provider manifest **pinned to an explicit released
+`controller-vX.Y.Z` tag** (the newest stable release at implementation time — never a branch like
+`main`/`latest`, per Constitution Principle I; the pinned manifest already digest-pins the controller
+image) and `kubectl wait` for its controller to be Ready before applying app manifests. The image reaches the
 cluster via `kind load docker-image <ref>` (no registry in dev). `up-prod` **never** creates or
 destroys a cluster — it targets the existing prod context and relies on that cluster's ingress
 controller / load balancer.

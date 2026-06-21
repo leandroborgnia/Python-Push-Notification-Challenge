@@ -10,7 +10,7 @@ Replace feature 001's `docker compose` dev bring-up with a **Kubernetes-on-both-
 delivered as four entrypoints: canonical bash scripts `scripts/up-dev.sh` / `scripts/up-prod.sh` and
 thin PowerShell wrappers `up-dev.ps1` / `up-prod.ps1` that invoke them through `wsl.exe` (logic lives
 in exactly one place → Windows/CI/container/prod parity). `up-dev` auto-creates a local **kind**
-cluster (with the host port-mappings ingress-nginx needs), installs ingress-nginx, builds the app +
+cluster (with the host port-mappings ingress-nginx needs), installs ingress-nginx (pinned to a released `controller-vX.Y.Z`), builds the app +
 frontend images, `kind load`s them, and applies `kubectl kustomize deploy/k8s/overlays/dev`. `up-prod`
 builds + pushes to a configured registry and applies the `prod` overlay against the existing
 production context (never creating/destroying clusters). Manifests are organized with **Kustomize**
@@ -48,7 +48,7 @@ scripts; **PowerShell** for the thin wrappers; **Kustomize**-flavoured Kubernete
 feature.
 
 **Primary Dependencies** (tooling, not app deps): `kubectl` (with its built-in kustomize), `kind`,
-Docker, `wsl.exe` (Windows side only); ingress-nginx (installed into kind by `up-dev`). Images: the
+Docker, `wsl.exe` (Windows side only); ingress-nginx (installed into kind by `up-dev`, pinned to a released `controller-vX.Y.Z`). Images: the
 existing `python:3.13.14-slim` runtime + `ghcr.io/astral-sh/uv` build tool (already pinned by
 digest), `node:18.20.8-alpine` build stage + an `nginx` runtime for the frontend, and pinned
 `postgres:16.14-alpine` / `rabbitmq:4.3.2-management` for the dev datastores.
@@ -133,6 +133,7 @@ scripts/
   up-prod.sh                   # preflight (context+secret) → build → push → render+apply prod overlay → wait
 
 deploy/k8s/
+  kind-config.yaml             # kind cluster config (control-plane: ingress-ready=true + host port-maps 80/443); used only by up-dev — NOT part of the kustomize tree
   base/
     kustomization.yaml         # references all base resources; images: placeholders (__API_IMAGE__/__FRONTEND_IMAGE__)
     namespace.yaml             # notification namespace
@@ -144,19 +145,20 @@ deploy/k8s/
     ingress.yaml               # Ingress: app host → frontend, api host → API (hosts patched per overlay)
   overlays/
     dev/
-      kustomization.yaml       # namespace, image refs (newName=local, newTag=per-run), secretGenerator (from secret.env),
+      kustomization.yaml       # namespace, image-ref placeholders substituted by render_apply (__API_IMAGE__/__FRONTEND_IMAGE__), secretGenerator (from secret.env),
                                #   replicas=1, patches base ingress hosts → app.localhost / api.localhost
       secret.env.example       # committed template; up-dev copies → gitignored secret.env (no creds in git)
       postgres.yaml            # in-cluster Postgres Deployment + Service (emptyDir, pinned image)
       rabbitmq.yaml            # in-cluster RabbitMQ Deployment + Service (pinned image)
       rabbitmq-config.yaml     # ConfigMap of permit-deprecated.conf (moved from deploy/rabbitmq/)
     prod/
-      kustomization.yaml       # image refs (newName=${REGISTRY}/…, newTag=per-run), replicas=N,
+      kustomization.yaml       # image-ref placeholders substituted by render_apply (__API_IMAGE__/__FRONTEND_IMAGE__ → ${REGISTRY}/…:<sha>), replicas=N,
                                #   patches ingress hosts → configured prod hostnames; NO datastores, NO secret
       replicas-patch.yaml      # prod replica counts
 
 backend/Dockerfile             # REWORKED: explicit multi-stage (build → slim runtime); CMD drops `alembic upgrade head`
 frontend/Dockerfile            # REWORKED: multi-stage (node build → nginx serving static assets)
+frontend/nginx.conf            # NEW: nginx config with SPA history-fallback (used by the runtime stage)
 
 # Retired / updated by this feature
 docker-compose.yml             # REMOVED (dev orchestrator retired — FR-015)

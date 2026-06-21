@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-21
 
-**Status**: Draft
+**Status**: Ready for Implementation
 
 **Input**: User description: "we need 2 sh scripts, up-dev and up-prod that switch on each environment, also 2 more ps1 scripts up-dev and up-prod that call their respective up-xxx.sh through wsl.exe"
 
@@ -13,7 +13,7 @@
 ### Session 2026-06-21
 
 - Q: `up-dev` should use Kubernetes like prod — what happens to the `docker compose` dev stack? → A: **Kubernetes-only dev.** Both `up-dev` and `up-prod` deploy to Kubernetes (dev → a **local** cluster; prod → the production cluster). `docker compose` is **retired** as the dev orchestrator; this feature supersedes feature 001's compose-based dev bring-up. (Constitution amended to v1.5.0.)
-- Q: Multi-stage image — which runtime base? → A: **Slim, keep the pin.** A multi-stage build (build stage compiles dependencies; runtime stage = `python:3.13.14-slim`, pinned by patch + digest) — *not* distroless, so the Python 3.13.14 pin and a shell are preserved. Schema migrations move out of the API start command into a **Kubernetes init container** (best practice for replicas; required by constitution v1.5.0).
+- Q: Multi-stage image — which runtime base? → A: **Slim, keep the pin.** A multi-stage build (build stage compiles dependencies; runtime stage = `python:3.13.14-slim`, pinned by patch + digest) — *not* distroless, so the Python 3.13.14 pin and a shell are preserved. Schema migrations move out of the API start command into a **one-shot per-deploy Job** (`migrate-<tag>`), with the API Deployment carrying a **wait-only init container** that blocks until the schema is current (it runs no DDL) — so migrations run once per deploy and replicas never race. (Refined during planning from the original "init container" answer to a Job + wait-init; constitution v1.5.0 permits either, and SC-007 requires once-per-deploy.)
 - Q: What does each environment deploy (workloads + datastores)? → A: **Dev = full stack in-cluster** — API + cpu-worker + io-worker + Postgres + RabbitMQ as in-cluster workloads. **Prod = app only** — API + cpu/io workers, configured to use **managed/external** Postgres + RabbitMQ (not in-cluster). So the manifests expand beyond 001's API-only set to add worker Deployments and (dev only) Postgres + RabbitMQ workloads.
 - Q: How are manifests structured/parametrized per environment? → A: **Kustomize.** A shared `deploy/k8s/base` (API + cpu/io workers + migration Job) with `overlays/dev` (adds in-cluster Postgres + RabbitMQ + dev config) and `overlays/prod` (managed-datastore config, replica counts, image tag). The scripts deploy with kubectl's built-in kustomize — render `kubectl kustomize deploy/k8s/overlays/<env>`, substitute the immutable per-run image tag, and `kubectl apply -f -` (equivalent to `apply -k` but lets the per-run tag flow in) — no extra tooling beyond `kubectl`.
 - Q: Dev local cluster + how does the image reach it? → A: **kind.** `up-dev` runs `docker build` then `kind load docker-image` into the local kind cluster (so the same script is CI-runnable). `up-prod` builds and **pushes to a configured container registry**, then applies. Manifests reference the immutable per-run image tag.
@@ -32,15 +32,16 @@ single command and have every workload come up healthy — without remembering t
 **Why this priority**: This is the everyday entrypoint and the one that gives dev/prod parity (same
 orchestrator as prod). It delivers the most value first.
 
-**Independent Test**: From a clean checkout against a running local cluster, run the dev bring-up
-entrypoint (the `.ps1` on Windows or the `.sh` directly on Linux) and confirm all workloads reach a
-healthy/ready state with no manual steps.
+**Independent Test**: From a clean checkout with `kind` installed (the local cluster is auto-created if
+absent), run the dev bring-up entrypoint (the `.ps1` on Windows or the `.sh` directly on Linux) and
+confirm all workloads reach a healthy/ready state with no manual steps.
 
 **Acceptance Scenarios**:
 
-1. **Given** a running local cluster and a clean checkout on Windows, **When** the developer runs
-   `up-dev.ps1`, **Then** the app image is built and the dev manifests are applied, and every workload
-   reaches Ready with no additional manual commands.
+1. **Given** `kind` installed (with or without an existing cluster) and a clean checkout on Windows,
+   **When** the developer runs `up-dev.ps1`, **Then** the kind cluster is ensured, the app image is
+   built and the dev manifests are applied, and every workload reaches Ready with no additional manual
+   commands.
 2. **Given** the same on Linux/CI, **When** the developer runs `scripts/up-dev.sh`, **Then** the bring-up
    behaves identically.
 3. **Given** the dev environment is already deployed, **When** the script is run again, **Then** it
@@ -101,8 +102,8 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 - **Prod managed-datastore config missing** → `up-prod` fails fast — there is no in-cluster
   Postgres/RabbitMQ fallback in prod; it must not deploy an app that cannot reach its data layer.
 - **Image build fails / build prerequisites missing** → the script stops before applying manifests.
-- **Migration init container fails** → the API workload does not start; the script surfaces the failure
-  and exits non-zero (no half-migrated, serving state).
+- **Migration Job fails** → the API workload does not start (its wait-only init container keeps
+  blocking); the script surfaces the failure and exits non-zero (no half-migrated, serving state).
 - **Script invoked from a subdirectory** → it still operates against the repository root.
 - **Windows line endings (CRLF)** on the `.sh` files → would break execution under WSL/bash; the bash
   scripts MUST remain LF so a Windows checkout still runs them correctly.
@@ -139,8 +140,10 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 - **FR-013**: The application container image MUST be built **multi-stage** — a build stage (toolchain +
   dependency compilation) separate from a minimal runtime stage based on `python:3.13.14-slim` (pinned
   patch version + digest), carrying no build tools.
-- **FR-014**: Schema migrations MUST run as a **Kubernetes init container** (or one-shot Job) before the
-  API serves traffic — NOT from the API container's start command — so replicas never race to migrate.
+- **FR-014**: Schema migrations MUST run as a dedicated step **before** the API serves traffic — a
+  **one-shot per-deploy Job** (`migrate-<tag>`) with a **wait-only init container** gating the API until
+  the schema is current (no DDL in the API pod) — and **NOT** from the API container's start command, so
+  migrations run exactly once per deploy and replicas never race to migrate.
 - **FR-015**: This feature MUST retire `docker compose` as the dev orchestrator (superseding feature
   001's compose-based bring-up) and update the operating manual / dev docs accordingly.
 - **FR-016**: The Kubernetes manifests MUST cover all app workloads — API, **cpu** worker, **io**
@@ -172,8 +175,9 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 
 ### Measurable Outcomes
 
-- **SC-001**: From a clean checkout on Windows (with a running local cluster), a developer brings the
-  full dev environment to Ready with a single command and zero manual follow-up steps.
+- **SC-001**: From a clean checkout on Windows (with `kind` installed; the local cluster is auto-created
+  if absent), a developer brings the full dev environment to Ready with a single command and zero manual
+  follow-up steps.
 - **SC-002**: The same dev bash script runs unchanged on Linux/CI and yields the same result (parity).
 - **SC-003**: `up-prod` applies the production topology and reports rollout success/failure via its exit
   code in 100% of runs.
@@ -184,7 +188,7 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 - **SC-006**: The runtime image contains **no build toolchain** — `uv` and compilers are absent (this
   binary absence is the authoritative check) — and is consequently smaller than an equivalent
   single-stage image.
-- **SC-007**: Migrations execute exactly **once per deploy** (init container/Job), never once-per-replica.
+- **SC-007**: Migrations execute exactly **once per deploy** (a one-shot Job), never once-per-replica.
 - **SC-008**: Running any script from a subdirectory behaves identically to running it from the repo root.
 
 ## Assumptions
@@ -206,10 +210,11 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`). Per-environment manifests use
   **Kustomize** (`deploy/k8s/base` + `overlays/{dev,prod}`, deployed via `kubectl kustomize … | <substitute tag> | kubectl apply -f -`).
 - This feature reworks existing artifacts to match constitution v1.5.0: `backend/Dockerfile` becomes
-  multi-stage (slim runtime), `deploy/k8s/` gains a dev overlay + a migration init container, and
+  multi-stage (slim runtime), `deploy/k8s/` gains a dev overlay + a migration Job (with a wait-only API
+init container), and
   `docker-compose.yml` + the compose-based dev docs (CLAUDE.md, 001 quickstart) are retired/updated.
 - Aligns with the constitution's Operations principle (dev + prod on Kubernetes; multi-stage images;
-  migrations as an init container). The "bash-canonical + thin PowerShell wrapper" convention is the
+  migrations as a one-shot Job). The "bash-canonical + thin PowerShell wrapper" convention is the
   new project standard introduced here.
 
 ## Out of Scope

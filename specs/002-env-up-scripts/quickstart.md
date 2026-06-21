@@ -71,7 +71,9 @@ IMAGE_REGISTRY=registry.example.com KUBE_CONTEXT=prod scripts/up-prod.sh   # →
 ```
 
 **Expected**: happy path reports rollout success via exit `0`; the missing-secret case prints an
-actionable message and exits non-zero **before** applying app workloads.
+actionable message and exits non-zero **before** applying app workloads. Each fail-fast case (missing
+secret / unreachable context / missing prerequisite) errors and exits non-zero **within ~10s**
+(SC-005) — e.g. wrap the call in `time …` and confirm there is no hang.
 
 ---
 
@@ -131,7 +133,7 @@ git check-attr text eol -- scripts/up-dev.sh # → text: set, eol: lf
 | SC | Scenario |
 |---|---|
 | SC-001 dev to Ready, one command | 1 |
-| SC-002 same script on Linux/CI | 1 |
+| SC-002 same script on Linux/CI | 1 (parity is by-design — one bash source of truth; run Scenario 1 unchanged on Linux/CI) |
 | SC-003 prod rollout via exit code | 4 |
 | SC-004 100% logic in bash; thin wrappers | 5 |
 | SC-005 fail-fast <10s on missing prereq | 4, 5 |

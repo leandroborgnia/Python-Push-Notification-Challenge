@@ -46,10 +46,16 @@ a floating tag (FR-018, Principle I).
 - `Deployment+Service/rabbitmq` (`rabbitmq:4.3.2-management`) + `ConfigMap` for `permit-deprecated.conf`.
 - Ingress host patch → `app.localhost` / `api.localhost`.
 - `replicas: 1` for api/workers/frontend.
+- Image refs inherit the base `__API_IMAGE__`/`__FRONTEND_IMAGE__` placeholders (substituted by
+  `up-dev`'s `render_apply` to the kind-loaded `notification-{service,frontend}:dev-<sha>`) — **no**
+  kustomize `images:` transformer.
 
 ## `overlays/prod` MUST set (and MUST NOT add)
 
-- Image `newName` = `${IMAGE_REGISTRY}/…` (registry-qualified), `newTag` = per-run `<sha>`.
+- Image refs come from the base `__API_IMAGE__`/`__FRONTEND_IMAGE__` placeholders, which `up-prod`'s
+  `render_apply` substitutes (post-render `sed`) to `${IMAGE_REGISTRY}/notification-{service,frontend}:<sha>`
+  — **not** a kustomize `images:` transformer (kustomize can't expand `${IMAGE_REGISTRY}` or inject a
+  per-run tag from a committed file; see research R3, FR-017).
 - `replicas: N` for api/workers/frontend.
 - Ingress host patch → configured prod hostnames.
 - **MUST NOT** define Postgres/RabbitMQ or the `notification-secrets` Secret — prod consumes an
@@ -59,7 +65,7 @@ a floating tag (FR-018, Principle I).
 
 | ID | Invariant |
 |---|---|
-| K1 | `dev` and `prod` differ **only** by overlay (images, replicas, datastores, ingress hosts, secret source). |
+| K1 | `dev` and `prod` differ by overlay in **replicas, datastores, ingress hosts, and secret source**; image refs are identical base placeholders (`__API_IMAGE__`/`__FRONTEND_IMAGE__`) differentiated by `render_apply` substitution, not overlay content. |
 | K2 | No manifest references `:latest` or a minor-only image tag (FR-018, Principle I). |
 | K3 | Both overlays render valid manifests under `kubectl apply --dry-run=client`, and **base resource names (incl. the migrate Job) are DNS-1123-valid even un-substituted** so `kubeconform` passes. |
 | K4 | The API never migrates at startup; migration is solely the `migrate-<tag>` Job (FR-014). |

@@ -35,6 +35,10 @@ Rendered by `kubectl kustomize deploy/k8s/overlays/<env>`. **B** = in `base` (bo
 | `__FRONTEND_IMAGE__` | `notification-frontend:dev-<sha>[…]` (kind-loaded) | `${IMAGE_REGISTRY}/notification-frontend:<sha>` (pushed) |
 | Job-name tag (DNS-valid placeholder) | `dev-<sha>[…]` | `<sha>` |
 
+> **Naming note**: the API Deployment/Service are named `notification-api`, while the container
+> **image** they run is `notification-service` (built from `backend/`). The distinct names are
+> intentional — a Kubernetes resource name vs a Docker image name — not a typo.
+
 ## B. Per-environment configuration matrix
 
 | Dimension | dev | prod |
