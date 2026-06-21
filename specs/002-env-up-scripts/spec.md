@@ -15,10 +15,10 @@
 - Q: `up-dev` should use Kubernetes like prod — what happens to the `docker compose` dev stack? → A: **Kubernetes-only dev.** Both `up-dev` and `up-prod` deploy to Kubernetes (dev → a **local** cluster; prod → the production cluster). `docker compose` is **retired** as the dev orchestrator; this feature supersedes feature 001's compose-based dev bring-up. (Constitution amended to v1.5.0.)
 - Q: Multi-stage image — which runtime base? → A: **Slim, keep the pin.** A multi-stage build (build stage compiles dependencies; runtime stage = `python:3.13.14-slim`, pinned by patch + digest) — *not* distroless, so the Python 3.13.14 pin and a shell are preserved. Schema migrations move out of the API start command into a **Kubernetes init container** (best practice for replicas; required by constitution v1.5.0).
 - Q: What does each environment deploy (workloads + datastores)? → A: **Dev = full stack in-cluster** — API + cpu-worker + io-worker + Postgres + RabbitMQ as in-cluster workloads. **Prod = app only** — API + cpu/io workers, configured to use **managed/external** Postgres + RabbitMQ (not in-cluster). So the manifests expand beyond 001's API-only set to add worker Deployments and (dev only) Postgres + RabbitMQ workloads.
-- Q: How are manifests structured/parametrized per environment? → A: **Kustomize.** A shared `deploy/k8s/base` (API + cpu/io workers + migration init container) with `overlays/dev` (adds in-cluster Postgres + RabbitMQ + dev config) and `overlays/prod` (managed-datastore config, replica counts, image tag). The scripts apply with `kubectl apply -k deploy/k8s/overlays/<env>` — no extra tooling beyond `kubectl`.
+- Q: How are manifests structured/parametrized per environment? → A: **Kustomize.** A shared `deploy/k8s/base` (API + cpu/io workers + migration Job) with `overlays/dev` (adds in-cluster Postgres + RabbitMQ + dev config) and `overlays/prod` (managed-datastore config, replica counts, image tag). The scripts deploy with kubectl's built-in kustomize — render `kubectl kustomize deploy/k8s/overlays/<env>`, substitute the immutable per-run image tag, and `kubectl apply -f -` (equivalent to `apply -k` but lets the per-run tag flow in) — no extra tooling beyond `kubectl`.
 - Q: Dev local cluster + how does the image reach it? → A: **kind.** `up-dev` runs `docker build` then `kind load docker-image` into the local kind cluster (so the same script is CI-runnable). `up-prod` builds and **pushes to a configured container registry**, then applies. Manifests reference the immutable per-run image tag.
 - Q: Is the frontend part of the Kubernetes deploy? → A: **Yes, in-cluster in both environments.** The frontend ships as its own **multi-stage** image (Node build → static assets served by a lightweight web server, e.g. nginx) with a Deployment/Service; `up-dev`/`up-prod` deploy it alongside the API. Local `npm run dev` remains available for fast HMR against the in-cluster API.
-- Q: How does a developer reach the app in the cluster? → A: **Ingress in both environments.** The manifests define Ingress resources (host routes for the frontend + API). `up-dev` installs the ingress controller (ingress-nginx) into the kind cluster and creates the cluster with host port-mappings, so the app is reachable at `http://localhost` — all in-cluster containers managed by the script, **nothing installed on the developer's machine**. Prod uses the production cluster's existing ingress controller / load balancer. (Supersedes an earlier port-forward answer, which was based on a misread of "install".)
+- Q: How does a developer reach the app in the cluster? → A: **Ingress in both environments.** The manifests define Ingress resources with **two host-based routes** — a frontend host and an API host (no path rewrite). `up-dev` installs the ingress controller (ingress-nginx) into the kind cluster and creates the cluster with host port-mappings, so in dev the app is reachable at **`http://app.localhost`** (frontend) and **`http://api.localhost`** (API) — `*.localhost` resolves to loopback in modern browsers — all in-cluster containers managed by the script, **nothing installed on the developer's machine**. Prod uses the production cluster's existing ingress controller / load balancer with configured hostnames. (Refined during planning to the two-host scheme; supersedes an earlier single-`http://localhost`/port-forward answer.)
 - Q: Should `up-dev` create the kind cluster if missing? → A: **Yes, auto-create (idempotent).** `up-dev` creates the local kind cluster if absent and reuses it if present, so the only cluster prerequisite for dev is that `kind` is installed. `up-prod` never creates/destroys clusters — it targets the existing production cluster context.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -150,16 +150,19 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   RabbitMQ**; the **prod** configuration MUST omit those and wire the app to **managed/external**
   Postgres + RabbitMQ via secrets/config, failing fast if that connection configuration is absent.
 - **FR-017**: The manifests MUST be organized with **Kustomize** — a shared `deploy/k8s/base` plus
-  `overlays/dev` and `overlays/prod`; `up-dev`/`up-prod` MUST deploy via
-  `kubectl apply -k deploy/k8s/overlays/<env>` (no tooling beyond `kubectl`).
+  `overlays/dev` and `overlays/prod`; `up-dev`/`up-prod` MUST deploy using kubectl's built-in
+  kustomize — rendering `kubectl kustomize deploy/k8s/overlays/<env>`, substituting the immutable
+  per-run image tag, and piping to `kubectl apply -f -` (equivalent to `apply -k`, but able to inject
+  the per-run tag; no tooling beyond `kubectl`).
 - **FR-018**: `up-dev` MUST build the image and load it into a local **kind** cluster
   (`kind load docker-image`); `up-prod` MUST build and push the image to a configured container
   registry before applying. Manifests MUST reference the immutable per-run tag (no `latest`).
 - **FR-019**: The app MUST be reachable via **Ingress** in both environments — the manifests define
-  Ingress resources routing to the frontend and API. `up-dev` MUST ensure an ingress controller
-  (ingress-nginx) is installed in the kind cluster so the app is reachable at `http://localhost`
+  Ingress resources with **two host-based routes** (a frontend host and an API host, no path rewrite).
+  `up-dev` MUST ensure an ingress controller (ingress-nginx) is installed in the kind cluster so the
+  app is reachable in dev at `http://app.localhost` (frontend) and `http://api.localhost` (API)
   (in-cluster containers managed by the script; nothing installed on the developer's machine). **Prod**
-  relies on the production cluster's ingress controller / load balancer.
+  relies on the production cluster's ingress controller / load balancer with configured hostnames.
 - **FR-020**: `up-dev` MUST ensure the local **kind** cluster exists — creating it if absent (with the
   host port-mappings the ingress controller needs), reusing it if present (idempotent) — so the only
   cluster prerequisite for dev is that `kind` is installed.
@@ -178,8 +181,9 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   only the WSL invocation (a handful of lines, no environment logic).
 - **SC-005**: A missing prerequisite (no WSL / no cluster / failed build) produces a clear error and a
   non-zero exit within 10 seconds (no hanging).
-- **SC-006**: The runtime image contains **no build toolchain** (e.g., `uv` is absent) and is materially
-  smaller than an equivalent single-stage image.
+- **SC-006**: The runtime image contains **no build toolchain** — `uv` and compilers are absent (this
+  binary absence is the authoritative check) — and is consequently smaller than an equivalent
+  single-stage image.
 - **SC-007**: Migrations execute exactly **once per deploy** (init container/Job), never once-per-replica.
 - **SC-008**: Running any script from a subdirectory behaves identically to running it from the repo root.
 
@@ -200,7 +204,7 @@ confirm arguments pass through and the bash script's exit code is propagated bac
   PATH) available; the wrappers target `wsl.exe`.
 - Script layout matches the requested shape — bash scripts under `scripts/` and PowerShell wrappers at
   the repository root (`up-dev.ps1` → `wsl.exe bash ./scripts/up-dev.sh`). Per-environment manifests use
-  **Kustomize** (`deploy/k8s/base` + `overlays/{dev,prod}`, applied via `kubectl apply -k`).
+  **Kustomize** (`deploy/k8s/base` + `overlays/{dev,prod}`, deployed via `kubectl kustomize … | <substitute tag> | kubectl apply -f -`).
 - This feature reworks existing artifacts to match constitution v1.5.0: `backend/Dockerfile` becomes
   multi-stage (slim runtime), `deploy/k8s/` gains a dev overlay + a migration init container, and
   `docker-compose.yml` + the compose-based dev docs (CLAUDE.md, 001 quickstart) are retired/updated.
@@ -211,8 +215,10 @@ confirm arguments pass through and the bash script's exit code is propagated bac
 ## Out of Scope
 
 - Provisioning the Kubernetes clusters, WSL, or `kubectl` themselves.
-- The CI/CD pipeline internals (CD already deploys prod via GitHub Actions; it MAY later reuse these
-  manifests, but pipeline changes are not part of this feature).
+- The CI/CD pipeline **deployment** internals (CD already deploys prod via GitHub Actions; it MAY
+  later reuse these manifests, but pipeline deployment changes are not part of this feature) — **except**
+  the minimal manifest-**validation** step update needed so the Kustomize restructure keeps the
+  existing CI green (repointing kubeconform at the rendered overlays).
 - Environments other than `dev` and `prod`.
 - Tear-down / `down` scripts (only bring-up is requested).
 - Application features, migration contents, or the analytics seed script.

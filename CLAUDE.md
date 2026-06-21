@@ -110,7 +110,7 @@ Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec a
 Follow the constitution at `.specify/memory/constitution.md` for anything not covered here.
 
 <!-- SPECKIT START -->
-Active feature: **001-system-liveness**. For technologies, project structure, shell commands, and
-other important context, read the current plan: `specs/001-system-liveness/plan.md` (with
+Active feature: **002-env-up-scripts**. For technologies, project structure, shell commands, and
+other important context, read the current plan: `specs/002-env-up-scripts/plan.md` (with
 `spec.md`, `research.md`, `data-model.md`, `contracts/`, and `quickstart.md` alongside it).
 <!-- SPECKIT END -->
