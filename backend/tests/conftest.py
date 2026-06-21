@@ -18,8 +18,12 @@ _RABBITMQ_CONF = (
 )
 
 # Base images pinned to explicit patch version + digest (constitution Principle I).
-_POSTGRES_IMAGE = "postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"  # noqa: E501
-_RABBITMQ_IMAGE = "rabbitmq:4.3.2-alpine@sha256:8489bba72d91465b2ed422394966d270858252844cc7bd91dfb8ab3dd43fdaea"  # noqa: E501
+_POSTGRES_IMAGE = (
+    "postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"  # noqa: E501
+)
+_RABBITMQ_IMAGE = (
+    "rabbitmq:4.3.2-alpine@sha256:8489bba72d91465b2ed422394966d270858252844cc7bd91dfb8ab3dd43fdaea"  # noqa: E501
+)
 
 # Worker pool per platform: Celery prefork doesn't run on Windows, so use solo locally;
 # CI (Linux) uses the production pool types. Routing + the sync/async seam are what these
