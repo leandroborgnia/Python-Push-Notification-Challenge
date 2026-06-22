@@ -115,7 +115,7 @@ daily hand-run commands. Day-to-day one-offs run on the host with `uv run …` (
 Follow the constitution at `.specify/memory/constitution.md` for anything not covered here.
 
 <!-- SPECKIT START -->
-Active feature: **002-env-up-scripts**. For technologies, project structure, shell commands, and
-other important context, read the current plan: `specs/002-env-up-scripts/plan.md` (with
+Active feature: **003-notification-management**. For technologies, project structure, shell commands,
+and other important context, read the current plan: `specs/003-notification-management/plan.md` (with
 `spec.md`, `research.md`, `data-model.md`, `contracts/`, and `quickstart.md` alongside it).
 <!-- SPECKIT END -->

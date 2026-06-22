@@ -61,6 +61,37 @@ spec:
                 secretKeyRef:
                   name: notification-secrets
                   key: broker-url
+            # 003 auth + channels config (all via the secret, per this project's pattern).
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: environment
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: jwt-secret
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-host
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-port
+            - name: MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: mail-from
+            - name: PROVIDER_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: provider-base-url
           # Liveness = process only (failure -> restart); never gated on DB/workers.
           livenessProbe:
             httpGet:

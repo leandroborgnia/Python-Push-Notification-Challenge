@@ -4,14 +4,33 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import pytest
+import pytest_asyncio
+
+from tests.fakes import FakeMailer
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from httpx import AsyncClient
+
+# Child-first order is unnecessary with CASCADE, but keep it explicit for readability.
+_NOTIFICATION_TABLES = (
+    "idempotency_key",
+    "delivery_transition",
+    "delivery",
+    "dispatch",
+    "template_recipient",
+    "template",
+    "contact",
+    "email_token",
+    "user_account",
+)
 
 _RABBITMQ_CONF = Path(__file__).resolve().parent / "fixtures" / "permit-deprecated.conf"
 
@@ -107,6 +126,249 @@ def truncate_completions(migrated_db: tuple[str, str, str]) -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE TABLE liveness_completion"))
     engine.dispose()
+
+
+@pytest.fixture
+def truncate_notification_tables(migrated_db: tuple[str, str, str]) -> Iterator[None]:
+    """Truncate all 003 tables — for tests whose rows are written by a worker subprocess (or a
+    committing client) and therefore cannot be cleaned by transaction rollback."""
+    yield
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(migrated_db[1])
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"TRUNCATE TABLE {', '.join(_NOTIFICATION_TABLES)} RESTART IDENTITY CASCADE")
+        )
+    engine.dispose()
+
+
+@pytest.fixture
+def fake_mailer() -> FakeMailer:
+    """A captured-token mailer bound into the test app (no real SMTP in the suite)."""
+    return FakeMailer()
+
+
+@pytest.fixture
+def enqueue_calls() -> list[UUID]:
+    """Captures dispatch fan-out enqueues so the rollback client never publishes to the broker."""
+    return []
+
+
+@pytest_asyncio.fixture
+async def client(
+    migrated_db: tuple[str, str, str], fake_mailer: FakeMailer, enqueue_calls: list[UUID]
+) -> AsyncIterator[AsyncClient]:
+    """Unauthenticated ``httpx.AsyncClient`` with transaction-rollback isolation (constitution V):
+    a single shared async connection holds the outer transaction and the app's sessions join it via
+    per-session SAVEPOINTs, so every write in a test rolls back at teardown. Tests that read DB
+    state can call ``get_async_sessionmaker()`` to get this same bound, in-transaction factory.
+
+    Fan-out is captured into ``enqueue_calls`` rather than published to the broker (no worker)."""
+    async_url, sync_url, broker_url = migrated_db
+    _reset_runtime(async_url, sync_url, broker_url)
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.bootstrap import build_container
+    from app.infra.db import async_engine as ae
+    from app.main import create_app
+
+    engine = create_async_engine(async_url)
+    conn = await engine.connect()
+    trans = await conn.begin()
+    ae._engine = engine
+    ae._sessionmaker = async_sessionmaker(
+        bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint"
+    )
+
+    app = create_app()
+    app.state.container = build_container(mailer=fake_mailer, enqueue=enqueue_calls.append)
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            yield ac
+    finally:
+        await trans.rollback()
+        await conn.close()
+        await engine.dispose()
+        ae._engine = None
+        ae._sessionmaker = None
+
+
+@pytest_asyncio.fixture
+async def committing_client(
+    migrated_db: tuple[str, str, str],
+    fake_mailer: FakeMailer,
+    truncate_notification_tables: None,
+) -> AsyncIterator[AsyncClient]:
+    """Like ``client`` but COMMITS (no rollback) and uses the real Celery enqueue, so a worker
+    subprocess can see the rows. Cleaned by truncation (rows outlive the request)."""
+    async_url, sync_url, broker_url = migrated_db
+    _reset_runtime(async_url, sync_url, broker_url)
+
+    from httpx import ASGITransport, AsyncClient
+
+    from app.bootstrap import build_container
+    from app.infra.db.async_engine import dispose_async_engine
+    from app.main import create_app
+
+    app = create_app()
+    app.state.container = build_container(mailer=fake_mailer)  # default enqueue → real broker
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            yield ac
+    finally:
+        await dispose_async_engine()
+
+
+@pytest.fixture
+def sync_session_factory(migrated_db: tuple[str, str, str]):  # type: ignore[no-untyped-def]
+    """A sync sessionmaker bound to the test DB — for factories + in-process worker-path tests."""
+    async_url, sync_url, broker_url = migrated_db
+    _reset_runtime(async_url, sync_url, broker_url)
+    from app.infra.db.sync_engine import get_sync_sessionmaker
+
+    return get_sync_sessionmaker()
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_http(base_url: str, timeout: float = 30.0) -> None:
+    import httpx
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            httpx.get(f"{base_url}/sms/none/status", timeout=1.0)
+            return  # any HTTP response (incl. 404) means the server is up
+        except httpx.HTTPError:
+            time.sleep(0.2)
+    raise RuntimeError(f"provider_sim did not start at {base_url}")
+
+
+@pytest.fixture
+def provider_sim_server(migrated_db: tuple[str, str, str]) -> Iterator[str]:
+    """Run the real ``app.provider_sim`` on a free port reachable by the io worker subprocess
+    (deterministic success: all PROVIDER_SIM_* failure rates default to 0)."""
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.provider_sim.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "error",
+        ],
+        env={**os.environ},
+    )
+    try:
+        _wait_http(base_url)
+        yield base_url
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _wait_for_io(broker_url: str, timeout: float = 30.0) -> None:
+    from celery import Celery
+
+    probe = Celery("probe", broker=broker_url)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        replies = probe.control.ping(timeout=2.0) or []
+        pools = {n.split("@", 1)[0] for r in replies for n in r}
+        if "io" in pools:
+            return
+        time.sleep(0.5)
+    raise RuntimeError("io worker did not become ready in time")
+
+
+@pytest.fixture
+def io_worker(migrated_db: tuple[str, str, str], provider_sim_server: str) -> Iterator[None]:
+    """A real io-only Celery worker subprocess pointed at the in-test provider_sim, with a fast SMS
+    poll cadence so confirmation tests finish quickly."""
+    async_url, sync_url, broker_url = migrated_db
+    env = {
+        **os.environ,
+        "DATABASE_URL_SYNC": sync_url,
+        "BROKER_URL": broker_url,
+        "PROVIDER_BASE_URL": provider_sim_server,
+        # Unreachable on purpose: email/push webhook callbacks fail harmlessly (no API here).
+        "WEBHOOK_CALLBACK_URL": "http://127.0.0.1:9/api/v1/webhooks/delivery",
+        "SMS_POLL_INTERVAL_S": "0.3",
+        "SMS_POLL_WINDOW_S": "10",
+    }
+    proc = _start_worker(_IO_POOL, "io@test", "io", env)
+    try:
+        _wait_for_io(broker_url)
+        yield
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@dataclass(frozen=True)
+class AuthedUser:
+    user_id: UUID
+    email: str
+    password: str
+    access_token: str
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+
+async def register_verify_login(
+    client: AsyncClient, fake_mailer: FakeMailer, *, email: str, password: str
+) -> AuthedUser:
+    """Drive the real register → verify → login endpoints and return the resulting credentials."""
+    from app.adapters.persistence.async_repo import AsyncAccountRepository
+    from app.infra.db.async_engine import get_async_sessionmaker
+
+    resp = await client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    assert resp.status_code == 201, resp.text
+    token = fake_mailer.verification_token_for(email)
+    resp = await client.post("/api/v1/auth/verify", params={"token": token})
+    assert resp.status_code == 200, resp.text
+    resp = await client.post("/api/v1/auth/login", data={"username": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    access_token = resp.json()["access_token"]
+
+    record = await AsyncAccountRepository(get_async_sessionmaker()).get_auth_by_email(email)
+    assert record is not None
+    return AuthedUser(user_id=record.id, email=email, password=password, access_token=access_token)
+
+
+@pytest_asyncio.fixture
+async def authed_user(client: AsyncClient, fake_mailer: FakeMailer) -> AuthedUser:
+    """A registered, verified, logged-in user (reused by US2/US3/US4 tests)."""
+    return await register_verify_login(
+        client, fake_mailer, email="ada@example.com", password="correct horse battery"
+    )
 
 
 def _start_worker(

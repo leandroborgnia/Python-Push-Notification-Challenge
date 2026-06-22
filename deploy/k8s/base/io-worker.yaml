@@ -43,6 +43,18 @@ spec:
                 secretKeyRef:
                   name: notification-secrets
                   key: broker-url
+            # The io worker is what actually calls the simulated provider and tells it where to POST
+            # email/push confirmations — so it (not just the API) needs both URLs in-cluster.
+            - name: PROVIDER_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: provider-base-url
+            - name: WEBHOOK_CALLBACK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: webhook-callback-url
           livenessProbe:
             exec:
               command:

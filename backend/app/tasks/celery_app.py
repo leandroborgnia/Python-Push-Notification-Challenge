@@ -14,7 +14,7 @@ def create_celery_app() -> Celery:
         "notification_service",
         broker=settings.broker_url,
         backend=None,
-        include=["app.tasks.liveness"],
+        include=["app.tasks.liveness", "app.tasks.sending"],
     )
     app.conf.update(
         task_ignore_result=True,

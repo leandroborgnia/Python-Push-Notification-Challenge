@@ -9,6 +9,7 @@ resources:
   - api.yaml
   - cpu-worker.yaml
   - io-worker.yaml
+  - provider-sim.yaml
   - frontend.yaml
   - migrate-job.yaml
   - ingress.yaml

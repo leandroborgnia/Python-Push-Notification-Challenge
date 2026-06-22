@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_container
-from app.application.liveness import LivenessService, ReadinessService
-from app.bootstrap import Container, build_container
+from app.application.liveness import ReadinessService
+from app.bootstrap import build_container
 from app.domain.health import SubsystemCheck, SubsystemName
 
 pytestmark = pytest.mark.integration
@@ -29,12 +31,7 @@ def test_livez_always_200_and_readyz_200_when_db_up(app):
 
 def test_readyz_503_when_db_unreachable_but_livez_stays_200(app):
     base = build_container()
-    failing = Container(
-        settings=base.settings,
-        liveness=LivenessService(),
-        readiness=ReadinessService(FailingDataStore()),
-        aggregate=base.aggregate,
-    )
+    failing = dataclasses.replace(base, readiness=ReadinessService(FailingDataStore()))
     app.dependency_overrides[get_container] = lambda: failing
     try:
         with TestClient(app) as client:

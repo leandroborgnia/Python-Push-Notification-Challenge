@@ -3,12 +3,13 @@ kind: Kustomization
 
 namespace: notification
 
-# base + the dev-only in-cluster datastores.
+# base + the dev-only in-cluster datastores + the dev mail catcher.
 resources:
   - ../../base
   - postgres.yaml
   - rabbitmq.yaml
   - rabbitmq-config.yaml
+  - mailpit.yaml
 
 # notification-secrets is BUILT from a gitignored secret.env (up-dev creates it from
 # secret.env.example on first run). No credential values are committed (Principle VI; K6).

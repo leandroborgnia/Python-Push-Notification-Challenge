@@ -1,0 +1,76 @@
+# Dev-only mail catcher: a real SMTP sink (port 1025) + web UI (port 8025) so verification/reset
+# mail is genuinely sent by the API's aiosmtplib path and viewable at http://mail.localhost
+# (research §3). Never deployed to prod (real SMTP replaces it there).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  labels:
+    app: mailpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  template:
+    metadata:
+      labels:
+        app: mailpit
+    spec:
+      containers:
+        - name: mailpit
+          # Pinned to an explicit patch version (Principle I); dev-only ephemeral catcher.
+          image: axllent/mailpit:v1.21.8
+          ports:
+            - name: smtp
+              containerPort: 1025
+            - name: http
+              containerPort: 8025
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8025
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8025
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  labels:
+    app: mailpit
+spec:
+  selector:
+    app: mailpit
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+    - name: http
+      port: 8025
+      targetPort: 8025
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mailpit
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: mail.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mailpit
+                port:
+                  number: 8025

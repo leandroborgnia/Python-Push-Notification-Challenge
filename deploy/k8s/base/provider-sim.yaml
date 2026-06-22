@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-sim
+  labels:
+    app: provider-sim
+spec:
+  # In-repo simulated channel provider (same image, different entrypoint). The io-worker calls it
+  # over HTTP for every send; it injects the failure modes and drives webhook/poll confirmation.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: provider-sim
+  template:
+    metadata:
+      labels:
+        app: provider-sim
+    spec:
+      containers:
+        - name: provider-sim
+          image: __API_IMAGE__
+          command:
+            - uvicorn
+            - app.provider_sim.main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          ports:
+            - containerPort: 8000
+          env:
+            # Real providers never call back inside the /send response — the confirmation webhook
+            # always lands after we've persisted 'sent' + provider_ref. Model that latency so the
+            # callback can't race the worker's record_sent commit (which would drop it as an
+            # uncorrelated ref and strand the delivery at 'sent'). In-process respx tests POST the
+            # webhook explicitly, so they leave this at its 0.0 default.
+            - name: PROVIDER_SIM_CALLBACK_DELAY_S
+              value: "2"
+          # No DB / broker — the simulator is stateless (in-memory SMS status only). It POSTs
+          # email/push callbacks to whatever callback_url the worker sends in the request body.
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: provider-sim
+  labels:
+    app: provider-sim
+spec:
+  selector:
+    app: provider-sim
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+  type: ClusterIP

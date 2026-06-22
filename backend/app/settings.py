@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# A deliberately non-prod placeholder so dev/test can sign tokens without committing a real
+# secret (constitution Principle VI). The validator below refuses it outside dev.
+_PLACEHOLDER_JWT_SECRET = "dev-insecure-placeholder-not-for-prod"
 
 
 class Settings(BaseSettings):
@@ -28,6 +33,44 @@ class Settings(BaseSettings):
     worker_ping_timeout_s: float = 0.8  # control.ping window; < check bound and < 1s (SC-005)
     readiness_normal_budget_s: float = 1.0  # normal-case target (SC-005)
     smoke_timeout_s: float = 10.0  # smoke round-trip bound (SC-007)
+
+    # Auth (constitution Principle VI). The secret has a non-prod placeholder default so dev/test
+    # can sign tokens; the validator below fails fast in any non-dev environment that left it unset.
+    jwt_secret: str = _PLACEHOLDER_JWT_SECRET
+    jwt_alg: str = "HS256"
+    access_token_ttl_min: int = 30
+    verify_token_ttl_h: int = 24
+    reset_token_ttl_h: int = 1
+
+    # Auth email — a real, direct SMTP path (aiosmtplib), separate from the simulated channels.
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    mail_from: str = "no-reply@notification.local"
+
+    # Simulated channel provider (HTTP base URL; respx-mocked in tests).
+    provider_base_url: str = "http://localhost:9000"
+    # Where the provider POSTs email/push delivery confirmations (our webhook). The worker passes
+    # this to the provider as the callback URL.
+    webhook_callback_url: str = "http://localhost:8000/api/v1/webhooks/delivery"
+
+    # Resilience knobs (application/ uses these — adapters stay dumb).
+    retry_max_attempts: int = 3
+    retry_backoff_base_s: float = 0.5
+    breaker_fail_max: int = 5
+    breaker_reset_timeout_s: float = 30.0
+    sms_poll_interval_s: float = 3.0
+    sms_poll_window_s: float = 30.0
+
+    @model_validator(mode="after")
+    def _require_real_jwt_secret_outside_dev(self) -> Settings:
+        if self.environment != "dev" and (
+            not self.jwt_secret or self.jwt_secret == _PLACEHOLDER_JWT_SECRET
+        ):
+            raise ValueError(
+                "JWT_SECRET must be set to a real secret when ENVIRONMENT is not 'dev' "
+                "(refusing the non-prod placeholder)."
+            )
+        return self
 
 
 @lru_cache
