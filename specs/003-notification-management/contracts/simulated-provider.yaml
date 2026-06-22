@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  title: Simulated Channel Provider (003, dev/prod double)
+  version: 1.0.0
+  description: >
+    In-repo simulated provider (app.provider_sim.main:app), deployed as its own kind workload from the
+    same image. Our channel adapters call it over HTTP; in tests these calls are mocked with respx and
+    this service is NOT run. It injects the constitution-mandated failure modes (latency, random errors,
+    HTTP 429, timeouts) and drives asynchronous confirmation:
+      - email/push: after a delay it POSTs the app's /api/v1/webhooks/delivery
+      - sms: it exposes a status endpoint the app polls
+    No authentication; no sender identity required for any channel (clarified 2026-06-21).
+servers:
+  - url: http://provider-sim.notification.svc.cluster.local
+    description: in-cluster (kind/prod)
+components:
+  schemas:
+    SendRequest:
+      type: object
+      required: [channel, destination, payload]
+      properties:
+        channel: { type: string, enum: [email, sms, push] }
+        destination: { type: string, description: email / phone / device_token (no sender identity) }
+        payload: { type: object, description: rendered message (title/content/etc.) }
+        callback_url: { type: string, nullable: true, description: where email/push post the result }
+    SendAccepted:
+      type: object
+      properties:
+        provider_ref: { type: string, description: correlation id; echoed in confirmation/poll }
+        accepted_at: { type: string, format: date-time }
+    SmsStatus:
+      type: object
+      properties:
+        provider_ref: { type: string }
+        status: { type: string, enum: [pending, delivered, failed] }
+        reason: { type: string, nullable: true }
+paths:
+  /send:
+    post:
+      summary: Accept an outbound send (or simulate latency/429/error/timeout)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SendRequest' } } }
+      responses:
+        '202':
+          description: accepted → maps to delivery 'sent'
+          content: { application/json: { schema: { $ref: '#/components/schemas/SendAccepted' } } }
+        '429': { description: simulated rate-limit (drives retry/backoff + breaker) }
+        '500': { description: simulated random error }
+        '504': { description: simulated timeout }
+  /sms/{provider_ref}/status:
+    get:
+      summary: SMS delivery status, polled by the app's sms_poll task (FR-031)
+      parameters: [{ name: provider_ref, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: status, content: { application/json: { schema: { $ref: '#/components/schemas/SmsStatus' } } } }
+        '404': { description: unknown provider_ref }
+# Note: the email/push confirmation is an OUTBOUND call FROM this service TO the app's
+# POST /api/v1/webhooks/delivery (see notification-api.yaml WebhookConfirmation), fired after a
+# simulated delay. It is documented there, not as a path here.

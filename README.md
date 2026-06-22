@@ -32,6 +32,39 @@ renders `/health` at http://app.localhost. See
 and validation guide, [`specs/001-system-liveness/quickstart.md`](specs/001-system-liveness/quickstart.md)
 for the health-surface walkthrough, and [CLAUDE.md](CLAUDE.md) for day-to-day commands.
 
+## Notification domain (003)
+
+On top of the skeleton, feature
+[`003-notification-management`](specs/003-notification-management/) adds the real product surface
+(see its [quickstart](specs/003-notification-management/quickstart.md) for an end-to-end walkthrough):
+
+- **Auth (US1)** — register → email-verify → login (PyJWT access token) → password reset. Passwords
+  are hashed with **argon2**; every product endpoint is token-gated and ownership-scoped. Auth mail
+  is awaited from the request path (aiosmtplib), never queued; in dev it lands in **Mailpit**.
+- **Contacts (US4)** — a per-user contacts book (name + optional email/phone/device-token) that
+  supplies template recipients.
+- **Templates (US2)** — per-user template CRUD over a single channel (Email/SMS/Push) with
+  channel-specific validation at save (e.g. SMS ≤160). Creating or editing a template **never sends**.
+- **Sending (US3)** — `POST /templates/{id}/send` snapshots a **Dispatch** (decoupled from the
+  template) and returns **202 in <1s**; the **io** worker fans out one resilient delivery per
+  recipient (`queued → sent → delivered | failed`). Resilience lives in `application/`, **not** the
+  channel adapters: **tenacity** retry/backoff, a per-channel/destination **pybreaker** circuit
+  breaker, and a **hand-rolled idempotency** claim that guarantees no recipient is delivered twice.
+  Channels talk to an in-repo **simulated provider** (`app.provider_sim`, its own workload) that
+  injects latency/429/timeout/error and drives **asynchronous confirmation** — a **webhook** to
+  `/api/v1/webhooks/delivery` for email/push, and a bounded **poll** task for SMS.
+
+Adding a channel = one new adapter under `adapters/channels/<name>/` implementing `ChannelPort` plus
+one binding in `bootstrap.py`; the shared dispatch/resilience core imports no concrete channel
+(Open/Closed — constitution Principle II, enforced by `tests/unit/test_channel_registry.py`).
+
+## Process model
+
+**One uvicorn process per pod**, everywhere — there is no multi-worker process manager layered on
+top. In prod, Kubernetes scales the API by **replica count** (one uvicorn per pod). The Celery
+**cpu** (prefork) and **io** (threads) workers are their own separate processes/services in every
+environment, orthogonal to the API process model.
+
 ## Why Celery (and not ARQ / TaskIQ)
 
 This service is async-first (FastAPI + asyncpg). For a **fully-async** service, **ARQ** or **TaskIQ**
