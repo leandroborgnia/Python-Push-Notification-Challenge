@@ -263,14 +263,14 @@ spread across all 24 hours and multiple dates; then run the aggregation and conf
 
 ### Tests for User Story 3
 
-- [ ] T041 [P] [US3] Integration test `backend/tests/integration/test_seed.py`: run `seed.py` at reduced N
+- [X] T041 [P] [US3] Integration test `backend/tests/integration/test_seed.py`: run `seed.py` at reduced N
       (e.g. 20 accounts / 2,000 sends); assert account + `sent`-transition counts, all 24 UTC hours and ≥2
       dates appear, and the §3.1 aggregation (`SyncReportAggregationRepository`, `user_id IS NOT NULL`)
       per-hour totals exactly match the generated counts (SC-005/SC-007).
 
 ### Implementation for User Story 3
 
-- [ ] T042 [US3] Create `backend/scripts/seed.py` — standalone **COPY-based** bulk insert (sync engine):
+- [X] T042 [US3] Create `backend/scripts/seed.py` — standalone **COPY-based** bulk insert (sync engine):
       ~1,000 `user_account` rows (synthetic emails, fixed hash, `is_verified=true`, `is_admin=false`) and
       ~500,000 **user-owned** completed sends (one `dispatch` with a real `user_id` + one `delivery`
       (`status` in `sent`/`delivered`) + one `delivery_transition` `to_status='sent'` with an **explicit
