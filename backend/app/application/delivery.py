@@ -59,7 +59,11 @@ class DeliveryService:
             return None
         span.set_attribute("delivery.channel", dispatch.channel.value)
         adapter = self._channels[dispatch.channel]
-        payload = Payload(title=dispatch.title, content=dispatch.content)
+        # One-time additive change: thread the dispatch attachment (the report PNG) through the
+        # shared flow; existing channels leave attachment None and ignore it (SC-010).
+        payload = Payload(
+            title=dispatch.title, content=dispatch.content, attachment=dispatch.attachment
+        )
 
         # Pre-send validation → direct queued→failed, never 'sent' (FR-022).
         destination = delivery.destination

@@ -13,6 +13,7 @@ from app.domain.accounts import EmailToken, TokenPurpose, UserAccount
 from app.domain.channels import Channel
 from app.domain.contacts import Contact
 from app.domain.dispatch import Delivery, DeliveryStatus, Dispatch, Transition
+from app.domain.stats import DEFAULT_INTERVAL_SECONDS, StatsReportConfig
 from app.domain.templates import Template
 from app.ports.repositories import AuthRecord
 
@@ -39,7 +40,9 @@ class AsyncLivenessCompletionReader:
 
 
 def _to_user(row: models.UserAccount) -> UserAccount:
-    return UserAccount(id=row.id, email=row.email, is_verified=row.is_verified)
+    return UserAccount(
+        id=row.id, email=row.email, is_verified=row.is_verified, is_admin=row.is_admin
+    )
 
 
 def _to_token(row: models.EmailToken) -> EmailToken:
@@ -127,6 +130,13 @@ class AsyncAccountRepository:
                 .values(password_hash=password_hash)
             )
             await session.commit()
+
+    async def get_admin_flag(self, user_id: UUID) -> bool:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(models.UserAccount.is_admin).where(models.UserAccount.id == user_id)
+            )
+            return bool(result.scalar_one_or_none())
 
 
 class AsyncEmailTokenRepository:
@@ -508,3 +518,46 @@ class AsyncDeliveryRepository:
             )
             await session.commit()
             return True
+
+
+def _to_stats_config(row: models.StatsReportConfig) -> StatsReportConfig:
+    return StatsReportConfig(interval_seconds=row.interval_seconds, anchor_at=row.anchor_at)
+
+
+class AsyncStatsConfigRepository:
+    """Implements StatsConfigRepository using the async (asyncpg) engine (API GET/POST path)."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def get(self) -> StatsReportConfig:
+        async with self._session_factory() as session:
+            row = await session.get(models.StatsReportConfig, 1)
+            if row is None:
+                # Self-create the singleton on first read (tests build schema w/o the data seed).
+                row = models.StatsReportConfig(id=1, interval_seconds=DEFAULT_INTERVAL_SECONDS)
+                session.add(row)
+                await session.commit()
+                await session.refresh(row)
+            return _to_stats_config(row)
+
+    async def set_interval(self, seconds: int, anchor_at: datetime) -> None:
+        async with self._session_factory() as session:
+            row = await session.get(models.StatsReportConfig, 1)
+            if row is None:
+                session.add(
+                    models.StatsReportConfig(id=1, interval_seconds=seconds, anchor_at=anchor_at)
+                )
+            else:
+                row.interval_seconds = seconds
+                row.anchor_at = anchor_at
+            await session.commit()
+
+    async def advance_anchor(self, anchor_at: datetime) -> None:
+        async with self._session_factory() as session:
+            await session.execute(
+                update(models.StatsReportConfig)
+                .where(models.StatsReportConfig.id == 1)
+                .values(anchor_at=anchor_at)
+            )
+            await session.commit()

@@ -105,6 +105,20 @@ class WebhookConfirmation(BaseModel):
     reason: str | None = None
 
 
+# --- Admin stats-report frequency (004 US1) -------------------------------------------------------
+
+
+class FrequencyResponse(BaseModel):
+    interval_seconds: int = Field(ge=0)
+    enabled: bool
+
+
+class FrequencyUpdate(BaseModel):
+    # 0 disables; >= 86400 accepted; 1..86399 rejected at the domain (422). The non-negative bound
+    # is a basic shape check; the actionable below-minimum message comes from the domain validator.
+    interval_seconds: int = Field(ge=0)
+
+
 class LiveResponse(BaseModel):
     status: str = "alive"
 

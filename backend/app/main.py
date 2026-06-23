@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import install_exception_handlers
+from app.api.routers.admin import router as admin_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.contacts import router as contacts_router
 from app.api.routers.health import router as health_router
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(templates_router)
     app.include_router(sends_router)
     app.include_router(webhooks_router)
+    app.include_router(admin_router)
     return app
 
 

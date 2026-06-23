@@ -25,14 +25,18 @@ class FailureReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Dispatch:
-    """A standalone send snapshot — holds NO link to the source template (FR-030)."""
+    """A standalone send snapshot — holds NO link to the source template (FR-030).
+
+    ``user_id`` is ``None`` for a server-originated send (a stats report); user sends always set it.
+    """
 
     id: UUID
-    user_id: UUID
+    user_id: UUID | None
     channel: Channel
     title: str
     content: str
     created_at: datetime | None = None
+    attachment: bytes | None = None  # the report PNG for server-originated sends (004)
 
 
 @dataclass(frozen=True, slots=True)

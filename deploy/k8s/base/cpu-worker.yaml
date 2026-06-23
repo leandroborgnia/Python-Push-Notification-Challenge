@@ -43,6 +43,29 @@ spec:
                 secretKeyRef:
                   name: notification-secrets
                   key: broker-url
+            # The cpu worker builds the channel registry (incl. the report channel) when it runs the
+            # stats-report cycle, so it carries the same SMTP/From config as the io sender (004).
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-host
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-port
+            - name: MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: mail-from
+            - name: REPORT_MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: report-mail-from
+                  optional: true
           # Workers expose no HTTP surface — liveness is a Celery control ping to THIS pool.
           livenessProbe:
             exec:

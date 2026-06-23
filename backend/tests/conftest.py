@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -371,6 +371,86 @@ async def authed_user(client: AsyncClient, fake_mailer: FakeMailer) -> AuthedUse
     )
 
 
+@dataclass(frozen=True)
+class AdminContext:
+    """A rollback-isolated client plus the seeded admin's logged-in credentials (004 US1).
+
+    ``fake_mailer`` is the same captured-token mailer bound into the app, so a test can drive
+    ``register_verify_login`` to create an ordinary (non-admin) user for the 403 checks."""
+
+    client: AsyncClient
+    admin: AuthedUser
+    fake_mailer: FakeMailer
+
+
+@pytest_asyncio.fixture
+async def admin_client(
+    migrated_db: tuple[str, str, str], fake_mailer: FakeMailer
+) -> AsyncIterator[AdminContext]:
+    """Seed a pre-verified admin via the factory, then log in — yielding a rollback-isolated client
+    bound to that admin's token. API writes (the stats-report config) roll back at teardown; the
+    committed admin row is removed by truncating the 004/003 tables afterwards (T008)."""
+    from tests.factories import ADMIN_TEST_PASSWORD, make_admin
+
+    async_url, sync_url, broker_url = migrated_db
+    _reset_runtime(async_url, sync_url, broker_url)
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.adapters.persistence.async_repo import AsyncAccountRepository
+    from app.bootstrap import build_container
+    from app.infra.db import async_engine as ae
+    from app.infra.db.sync_engine import get_sync_sessionmaker
+    from app.main import create_app
+
+    admin_email = "admin@example.com"
+    make_admin(get_sync_sessionmaker(), email=admin_email, password=ADMIN_TEST_PASSWORD)
+
+    engine = create_async_engine(async_url)
+    conn = await engine.connect()
+    trans = await conn.begin()
+    ae._engine = engine
+    ae._sessionmaker = async_sessionmaker(
+        bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint"
+    )
+
+    app = create_app()
+    app.state.container = build_container(mailer=fake_mailer, enqueue=lambda _dispatch_id: None)
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            resp = await ac.post(
+                "/api/v1/auth/login",
+                data={"username": admin_email, "password": ADMIN_TEST_PASSWORD},
+            )
+            assert resp.status_code == 200, resp.text
+            access_token = resp.json()["access_token"]
+            record = await AsyncAccountRepository(ae._sessionmaker).get_auth_by_email(admin_email)
+            assert record is not None
+            admin = AuthedUser(
+                user_id=record.id,
+                email=admin_email,
+                password=ADMIN_TEST_PASSWORD,
+                access_token=access_token,
+            )
+            yield AdminContext(client=ac, admin=admin, fake_mailer=fake_mailer)
+    finally:
+        await trans.rollback()
+        await conn.close()
+        await engine.dispose()
+        ae._engine = None
+        ae._sessionmaker = None
+        cleanup = create_engine(sync_url)
+        with cleanup.begin() as c:
+            c.execute(
+                text(f"TRUNCATE TABLE {', '.join(_NOTIFICATION_TABLES)} RESTART IDENTITY CASCADE")
+            )
+        cleanup.dispose()
+
+
 def _start_worker(
     pool: str, nodename: str, queue: str, env: dict[str, str]
 ) -> subprocess.Popen[bytes]:
@@ -431,3 +511,90 @@ def _wait_for_workers(broker_url: str, timeout: float = 30.0) -> None:
             return
         time.sleep(0.5)
     raise RuntimeError("workers did not become ready in time")
+
+
+@dataclass
+class SmtpSink:
+    """A local in-process SMTP catcher reachable by a worker subprocess (004 report round-trip)."""
+
+    host: str
+    port: int
+    messages: list[bytes]
+
+
+@pytest.fixture
+def smtp_sink() -> Iterator[SmtpSink]:
+    """Run an ``aiosmtpd`` controller on a free port; capture raw message bytes (T027)."""
+    from aiosmtpd.controller import Controller
+
+    captured: list[bytes] = []
+
+    class _Capturing:
+        async def handle_DATA(self, server, session, envelope):  # noqa: N802
+            captured.append(bytes(envelope.content))
+            return "250 Message accepted"
+
+    port = _free_port()
+    controller = Controller(_Capturing(), hostname="127.0.0.1", port=port)
+    controller.start()
+    try:
+        yield SmtpSink(host="127.0.0.1", port=port, messages=captured)
+    finally:
+        controller.stop()
+
+
+def _truncate_report_tables(sync_url: str) -> None:
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(sync_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"TRUNCATE TABLE {', '.join(_NOTIFICATION_TABLES)}, stats_report_config "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+    engine.dispose()
+
+
+@pytest.fixture
+def report_workers(
+    migrated_db: tuple[str, str, str], smtp_sink: SmtpSink
+) -> Iterator[Callable[[], None]]:
+    """Start real cpu+io workers pointed at the ``aiosmtpd`` sink and yield a ``trigger`` that fires
+    ``stats_report_tick`` on the cpu queue. The test nudges the config to due, then calls trigger;
+    the cpu worker runs the cycle and the io worker delivers the report emails (T027/T030).
+    Committed rows (incl. the config singleton) are truncated at teardown."""
+    async_url, sync_url, broker_url = migrated_db
+    _reset_runtime(async_url, sync_url, broker_url)
+    env = {
+        **os.environ,
+        "DATABASE_URL_SYNC": sync_url,
+        "BROKER_URL": broker_url,
+        "SMTP_HOST": smtp_sink.host,
+        "SMTP_PORT": str(smtp_sink.port),
+        "MAIL_FROM": "no-reply@notification.local",
+        "REPORT_MAIL_FROM": "reports@notification.local",
+    }
+    procs = [
+        _start_worker(_CPU_POOL, "cpu@test", "cpu", env),
+        _start_worker(_IO_POOL, "io@test", "io", env),
+    ]
+
+    def trigger() -> None:
+        from app.tasks.reporting import stats_report_tick
+
+        stats_report_tick.apply_async(queue="cpu")
+
+    try:
+        _wait_for_workers(broker_url)
+        yield trigger
+    finally:
+        for proc in procs:
+            proc.terminate()
+        for proc in procs:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        _truncate_report_tables(sync_url)

@@ -36,11 +36,13 @@ def make_user(
     email: str | None = None,
     password_hash: str = "x-not-a-real-hash",
     is_verified: bool = True,
+    is_admin: bool = False,
 ) -> UserAccount:
     user = UserAccount(
         email=(email or _unique_email()).lower(),
         password_hash=password_hash,
         is_verified=is_verified,
+        is_admin=is_admin,
     )
     with session_factory() as session:
         session.add(user)
@@ -48,6 +50,29 @@ def make_user(
         session.refresh(user)
         session.expunge(user)
     return user
+
+
+# The seeded test admin's known password — hashed with the real argon2 hasher so the login
+# endpoint verifies it (T008). Distinct from the dev placeholder used by the migration seed.
+ADMIN_TEST_PASSWORD = "admin-test-password"
+
+
+def make_admin(
+    session_factory: sessionmaker[Session],
+    *,
+    email: str = "admin@example.com",
+    password: str = ADMIN_TEST_PASSWORD,
+) -> UserAccount:
+    """Seed a pre-verified admin with a real argon2 password hash (so it can log in via the API)."""
+    from app.adapters.security.hasher import Argon2PasswordHasher
+
+    return make_user(
+        session_factory,
+        email=email,
+        password_hash=Argon2PasswordHasher().hash(password),
+        is_verified=True,
+        is_admin=True,
+    )
 
 
 def make_email_token(
@@ -134,6 +159,43 @@ def make_dispatch(
         session.refresh(dispatch)
         session.expunge(dispatch)
     return dispatch
+
+
+def make_sent_delivery(
+    session_factory: sessionmaker[Session],
+    *,
+    user_id: uuid.UUID,
+    at: datetime,
+    channel: str = "email",
+    destination: str = "grace@example.com",
+    recipient_name: str = "Grace Hopper",
+) -> Delivery:
+    """A user-owned send that reached ``sent`` at an explicit UTC instant — the aggregation's unit.
+
+    Writes one dispatch + one ``sent`` delivery + a ``to_status='sent'`` transition with the given
+    ``at`` (the column's ``server_default now()`` is overridden) so the per-UTC-hour aggregation
+    (data-model §3.1) sees a deterministic hour bucket (T027)."""
+    dispatch = Dispatch(user_id=user_id, channel=channel, title="Seed", content="seed")
+    with session_factory() as session:
+        session.add(dispatch)
+        session.flush()
+        delivery = Delivery(
+            dispatch_id=dispatch.id,
+            recipient_name=recipient_name,
+            destination=destination,
+            status="sent",
+        )
+        session.add(delivery)
+        session.flush()
+        session.add(
+            DeliveryTransition(
+                delivery_id=delivery.id, from_status="queued", to_status="sent", at=at
+            )
+        )
+        session.commit()
+        session.refresh(delivery)
+        session.expunge(delivery)
+    return delivery
 
 
 def make_delivery(

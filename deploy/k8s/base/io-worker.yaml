@@ -55,6 +55,29 @@ spec:
                 secretKeyRef:
                   name: notification-secrets
                   key: webhook-callback-url
+            # The io worker delivers the 004 report email via the real smtplib report channel, so it
+            # needs the SMTP target (dev → Mailpit) and the From-addresses.
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-host
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-port
+            - name: MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: mail-from
+            - name: REPORT_MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: report-mail-from
+                  optional: true
           livenessProbe:
             exec:
               command:

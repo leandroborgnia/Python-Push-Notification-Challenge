@@ -30,3 +30,20 @@ spec:
                 secretKeyRef:
                   name: notification-secrets
                   key: database-url-sync
+            # 004 admin seed: the 0003 data migration reads these to provision the admin. ENVIRONMENT
+            # gates the placeholder refusal (prod must supply a real admin-password; Principle VI).
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: environment
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: admin-email
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: admin-password

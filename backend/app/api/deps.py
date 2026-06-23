@@ -42,3 +42,19 @@ def current_user(
 
 
 CurrentUser = Annotated[UUID, Depends(current_user)]
+
+
+async def current_admin(container: ContainerDep, user_id: CurrentUser) -> UUID:
+    """Resolve the caller and require admin privileges.
+
+    Layers on ``current_user`` (401 for a missing/invalid/expired token, unchanged) and raises 403
+    for an authenticated non-admin (FR-005). Returns the admin's user id.
+    """
+    if not await container.accounts.is_admin(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="admin privileges required"
+        )
+    return user_id
+
+
+CurrentAdmin = Annotated[UUID, Depends(current_admin)]

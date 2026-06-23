@@ -9,3 +9,4 @@ class Channel(StrEnum):
     EMAIL = "email"
     SMS = "sms"
     PUSH = "push"
+    REPORT = "report"  # server-originated stats-report email (004)

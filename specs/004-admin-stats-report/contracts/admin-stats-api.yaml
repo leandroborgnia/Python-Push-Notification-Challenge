@@ -1,0 +1,130 @@
+openapi: 3.1.0
+info:
+  title: Admin Stats-Report Frequency API
+  version: "1.0.0"
+  description: >
+    Admin-only control of the single, server-wide stats-report cadence (feature
+    004-admin-stats-report). Reuses 003's OAuth2 password / PyJWT bearer auth. The frequency is an
+    integer number of seconds: 0 disables reporting; values >= 86400 (24h) are accepted; values in
+    1..86399 are rejected. Default at provisioning is 2592000 (30 days). Changing the value resets the
+    scheduling anchor so the next report fires one interval after the change.
+servers:
+  - url: /api/v1
+    description: Versioned API root (the spec's /admin/... lives under /api/v1).
+paths:
+  /admin/stats-report/frequency:
+    get:
+      operationId: getStatsReportFrequency
+      tags: [admin]
+      summary: Read the current stats-report frequency
+      description: >
+        Admin-only. Returns the current interval in seconds and whether reporting is enabled
+        (interval_seconds != 0). (FR-005, FR-007)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current frequency.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FrequencyResponse" }
+              examples:
+                default:
+                  summary: Freshly provisioned (30 days, enabled)
+                  value: { interval_seconds: 2592000, enabled: true }
+                disabled:
+                  summary: Reporting disabled
+                  value: { interval_seconds: 0, enabled: false }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: setStatsReportFrequency
+      tags: [admin]
+      summary: Set the stats-report frequency
+      description: >
+        Admin-only. Persists a new interval (seconds). 0 disables; >= 86400 accepted; 1..86399 rejected
+        with an actionable error and the stored value unchanged. Resets the scheduling anchor so the next
+        report fires one interval after the change. (FR-005, FR-008, FR-010)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FrequencyUpdate" }
+            examples:
+              setMonthly: { summary: 30 days, value: { interval_seconds: 2592000 } }
+              setMinimum: { summary: Minimum 24h, value: { interval_seconds: 86400 } }
+              disable:    { summary: Disable reporting, value: { interval_seconds: 0 } }
+      responses:
+        "200":
+          description: New frequency stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FrequencyResponse" }
+              example: { interval_seconds: 86400, enabled: true }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: >
+            Below-minimum interval (1..86399). Stored value is unchanged. (FR-008, SC-002)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              example:
+                detail: "interval_seconds must be 0 (disable) or at least 86400 (24 hours); got 3600"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: PyJWT access token from POST /api/v1/auth/login (must belong to the admin account).
+  responses:
+    Unauthenticated:
+      description: Missing, malformed, signature-invalid, or expired token. (FR-005)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "not authenticated" }
+    Forbidden:
+      description: Authenticated non-admin caller. (FR-005)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "admin privileges required" }
+  schemas:
+    FrequencyResponse:
+      type: object
+      required: [interval_seconds, enabled]
+      properties:
+        interval_seconds:
+          type: integer
+          minimum: 0
+          description: Current interval in seconds (0 = disabled).
+        enabled:
+          type: boolean
+          description: Derived — true when interval_seconds != 0.
+    FrequencyUpdate:
+      type: object
+      required: [interval_seconds]
+      properties:
+        interval_seconds:
+          type: integer
+          minimum: 0
+          description: 0 disables; >= 86400 accepted; 1..86399 rejected (422).
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+    ValidationError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object }
+          description: FastAPI-style validation detail (string or 422 error list).

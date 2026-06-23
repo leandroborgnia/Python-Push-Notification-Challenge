@@ -58,6 +58,10 @@ class AccountsService:
         email_token = await self._consume(token, TokenPurpose.VERIFY)
         await self._accounts.set_verified(email_token.user_id)
 
+    async def is_admin(self, user_id: UUID) -> bool:
+        """Whether the account is an admin — drives the ``current_admin`` dependency (FR-003)."""
+        return await self._accounts.get_admin_flag(user_id)
+
     async def login(self, email: str, password: str) -> str:
         record = await self._accounts.get_auth_by_email(email.strip().lower())
         if record is None or not self._hasher.verify(password, record.password_hash):

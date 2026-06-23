@@ -7,6 +7,7 @@ from uuid import UUID
 from app.adapters.channels.email import SimulatedEmailChannel
 from app.adapters.channels.provider_http import ProviderClient
 from app.adapters.channels.push import SimulatedPushChannel
+from app.adapters.channels.report_email import SmtpReportEmailChannel
 from app.adapters.channels.sms import SimulatedSmsChannel
 from app.adapters.mailer.smtp import SmtpMailer
 from app.adapters.persistence.async_repo import (
@@ -15,6 +16,7 @@ from app.adapters.persistence.async_repo import (
     AsyncDeliveryRepository,
     AsyncDispatchRepository,
     AsyncEmailTokenRepository,
+    AsyncStatsConfigRepository,
     AsyncTemplateRepository,
 )
 from app.adapters.probes.celery_broker import CeleryBrokerProbe
@@ -28,6 +30,7 @@ from app.application.contacts import ContactsService
 from app.application.liveness import LivenessService, ReadinessService
 from app.application.readiness_aggregate import AggregateReadinessService
 from app.application.sending import SendingService, SendQueryService
+from app.application.stats_config import StatsConfigService
 from app.application.templates import TemplatesService
 from app.domain.channels import Channel
 from app.infra.db.async_engine import get_async_sessionmaker
@@ -48,6 +51,12 @@ def build_channel_registry(settings: Settings) -> dict[Channel, ChannelPort]:
         Channel.EMAIL: SimulatedEmailChannel(provider, callback),
         Channel.SMS: SimulatedSmsChannel(provider),
         Channel.PUSH: SimulatedPushChannel(provider, callback),
+        # Real stdlib-smtplib report channel (004); reuses the resilient pipeline (SC-010).
+        Channel.REPORT: SmtpReportEmailChannel(
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            mail_from=settings.report_mail_from or settings.mail_from,
+        ),
     }
 
 
@@ -71,6 +80,7 @@ class Container:
     sending: SendingService
     send_query: SendQueryService
     confirmation: WebhookConfirmationService
+    stats_config: StatsConfigService
 
 
 def build_container(
@@ -127,6 +137,9 @@ def build_container(
     )
     send_query = SendQueryService(dispatches=dispatch_repo, deliveries=delivery_repo)
     confirmation = WebhookConfirmationService(delivery_repo)
+    stats_config = StatsConfigService(
+        repository=AsyncStatsConfigRepository(session_factory), clock=clock
+    )
 
     return Container(
         settings=settings,
@@ -143,4 +156,5 @@ def build_container(
         sending=sending,
         send_query=send_query,
         confirmation=confirmation,
+        stats_config=stats_config,
     )

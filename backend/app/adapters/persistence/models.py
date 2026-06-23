@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -59,6 +60,7 @@ class UserAccount(Base):
     email: Mapped[str] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text)
     is_verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), default=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -145,22 +147,30 @@ class TemplateRecipient(Base):
 
 class Dispatch(Base):
     """The send snapshot. Holds NO foreign key to ``template`` (FR-030) so later template edits
-    never alter a past send."""
+    never alter a past send.
+
+    ``user_id`` is nullable: ``NULL`` marks a **server-originated** send (a stats report), excluded
+    from aggregation and from every user's send-history (both key off ``user_id``). FR-020.
+    """
 
     __tablename__ = "dispatch"
     __table_args__ = (
-        CheckConstraint("channel IN ('email','sms','push')", name="ck_dispatch_channel"),
+        CheckConstraint("channel IN ('email','sms','push','report')", name="ck_dispatch_channel"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("user_account.id", ondelete="CASCADE"), index=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("user_account.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
     )
     channel: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
     content: Mapped[str] = mapped_column(Text)
+    attachment_png: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -229,3 +239,30 @@ class IdempotencyKey(Base):
     )
     key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# --- 004 admin stats-report (singleton cadence + scheduling anchor) -------------------------------
+
+
+class StatsReportConfig(Base):
+    """The single, server-wide report cadence row. The ``id = 1`` CHECK makes it a true singleton;
+    ``interval_seconds = 0`` disables reporting, ``>= 86400`` enables it (defence-in-depth CHECK
+    behind the API validation). ``anchor_at`` drives due-ness (next_run = anchor + interval)."""
+
+    __tablename__ = "stats_report_config"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_stats_report_config_singleton"),
+        CheckConstraint(
+            "interval_seconds = 0 OR interval_seconds >= 86400",
+            name="ck_stats_report_config_interval",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False, default=1)
+    interval_seconds: Mapped[int] = mapped_column(
+        Integer, server_default=text("2592000"), default=2592000
+    )
+    anchor_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

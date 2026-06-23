@@ -32,10 +32,16 @@ class ContactSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class Payload:
-    """The rendered, snapshotted message handed to the provider."""
+    """The rendered, snapshotted message handed to the provider.
+
+    ``attachment`` is a one-time additive capability (e.g. the report PNG); existing channel
+    adapters ignore it (SC-010) — only the report channel reads it.
+    """
 
     title: str
     content: str
+    attachment: bytes | None = None
+    attachment_name: str = "report.png"
 
 
 @dataclass(frozen=True, slots=True)

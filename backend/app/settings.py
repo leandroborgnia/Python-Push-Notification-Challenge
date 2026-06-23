@@ -9,6 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # secret (constitution Principle VI). The validator below refuses it outside dev.
 _PLACEHOLDER_JWT_SECRET = "dev-insecure-placeholder-not-for-prod"
 
+# The seeded admin's dev-only password. Committed because it is a placeholder, not a secret; the
+# validator below refuses it outside dev (FR-002), mirroring the JWT-secret pattern.
+_PLACEHOLDER_ADMIN_PASSWORD = "admin"
+
 
 class Settings(BaseSettings):
     """Application configuration sourced from environment / .env (never hard-coded)."""
@@ -47,6 +51,15 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     mail_from: str = "no-reply@notification.local"
 
+    # Admin account & stats-report (004). Credentials come from env; the committed defaults are a
+    # dev-only placeholder refused outside dev by the validator below (FR-002, Principle VI).
+    admin_email: str = "admin@localhost"
+    admin_password: str = _PLACEHOLDER_ADMIN_PASSWORD
+    # From-address for report emails; falls back to mail_from when unset.
+    report_mail_from: str | None = None
+    # Celery Beat tick cadence — how often the due-check fires (the cadence itself lives in the DB).
+    stats_report_due_check_interval_s: float = 60.0
+
     # Simulated channel provider (HTTP base URL; respx-mocked in tests).
     provider_base_url: str = "http://localhost:9000"
     # Where the provider POSTs email/push delivery confirmations (our webhook). The worker passes
@@ -68,6 +81,17 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "JWT_SECRET must be set to a real secret when ENVIRONMENT is not 'dev' "
+                "(refusing the non-prod placeholder)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_real_admin_password_outside_dev(self) -> Settings:
+        if self.environment != "dev" and (
+            not self.admin_password or self.admin_password == _PLACEHOLDER_ADMIN_PASSWORD
+        ):
+            raise ValueError(
+                "ADMIN_PASSWORD must be set to a real secret when ENVIRONMENT is not 'dev' "
                 "(refusing the non-prod placeholder)."
             )
         return self

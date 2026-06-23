@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -9,6 +10,7 @@ from app.domain.accounts import EmailToken, TokenPurpose, UserAccount
 from app.domain.channels import Channel
 from app.domain.contacts import Contact
 from app.domain.dispatch import Delivery, DeliveryStatus, Dispatch, Transition
+from app.domain.stats import StatsReportConfig
 from app.domain.templates import Template
 
 
@@ -51,6 +53,12 @@ class AccountRepository(Protocol):
     async def set_verified(self, user_id: UUID) -> None: ...
 
     async def set_password_hash(self, user_id: UUID, password_hash: str) -> None: ...
+
+    async def get_admin_flag(self, user_id: UUID) -> bool:
+        """Return whether the account is an admin (drives ``current_admin``, FR-003/FR-005).
+
+        ``False`` for a non-admin or an unknown id."""
+        ...
 
 
 class EmailTokenRepository(Protocol):
@@ -201,4 +209,75 @@ class IdempotencyKeyRepository(Protocol):
     def claim(self, delivery_id: UUID, key: str) -> bool:
         """Insert the claim. ``True`` if newly claimed, ``False`` if it already existed (a prior
         attempt already delivered → caller must not send again)."""
+        ...
+
+
+# --- Stats-report config (004) -------------------------------------------------------------------
+
+
+class StatsConfigRepository(Protocol):
+    """Async persistence of the singleton stats-report cadence (API GET/POST path). A sync sibling
+    (``SyncStatsConfigRepository``) serves the Beat tick / cycle. Same shape, two engines."""
+
+    async def get(self) -> StatsReportConfig:
+        """Return the singleton config, self-creating the ``id=1`` row on first read (FR-009)."""
+        ...
+
+    async def set_interval(self, seconds: int, anchor_at: datetime) -> None:
+        """Persist a new interval and reset the scheduling anchor (FR-010)."""
+        ...
+
+    async def advance_anchor(self, anchor_at: datetime) -> None:
+        """Move the scheduling anchor forward (after a cycle fires)."""
+        ...
+
+
+class SyncStatsConfigRepository(Protocol):
+    """Sync sibling of :class:`StatsConfigRepository` for the Beat tick / cycle (psycopg engine)."""
+
+    def get(self) -> StatsReportConfig: ...
+
+    def set_interval(self, seconds: int, anchor_at: datetime) -> None: ...
+
+    def advance_anchor(self, anchor_at: datetime) -> None: ...
+
+
+# --- Stats-report aggregation & server-owned report sends (004, sync engine) ----------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRef:
+    """Minimal account projection for report fan-out (data-model §3.2)."""
+
+    id: UUID
+    email: str
+    is_admin: bool
+
+
+class SyncReportAggregationRepository(Protocol):
+    """Reads the per-UTC-hour send aggregate off the existing lifecycle tables (sync engine).
+
+    Every query filters ``delivery_transition.to_status='sent' AND dispatch.user_id IS NOT NULL`` so
+    server-owned report sends never count (no recursion — FR-020, SC-009)."""
+
+    def per_user_hour_counts(self) -> Mapping[UUID, Mapping[int, int]]:
+        """``{user_id: {hour: sends}}`` over all qualifying sends (data-model §3.1)."""
+        ...
+
+    def global_hour_counts(self) -> Mapping[int, int]:
+        """``{hour: sends}`` summed across all users (admin included, no double-count)."""
+        ...
+
+    def list_accounts(self) -> Sequence[AccountRef]:
+        """Every account ``(id, email, is_admin)`` — left-joined so zero-send users still report."""
+        ...
+
+
+class SyncReportSendRepository(Protocol):
+    """Creates the server-owned report rows the cycle delivers through the existing pipeline."""
+
+    def create_report_delivery(self, *, to_email: str, subject: str, body: str, png: bytes) -> UUID:
+        """INSERT a server-owned ``dispatch`` (``user_id NULL``, ``channel='report'``,
+        ``attachment_png=png``) + one queued ``delivery`` (``destination=to_email``,
+        ``contact_id NULL``) + its initial queued transition. Returns the new ``delivery_id``."""
         ...

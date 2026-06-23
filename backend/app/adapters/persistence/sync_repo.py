@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -10,6 +13,8 @@ from app.adapters.persistence import models
 from app.adapters.persistence.models import LivenessCompletion
 from app.domain.channels import Channel
 from app.domain.dispatch import Delivery, DeliveryStatus, Dispatch
+from app.domain.stats import DEFAULT_INTERVAL_SECONDS, StatsReportConfig
+from app.ports.repositories import AccountRef
 
 
 class SyncLivenessCompletionWriter:
@@ -32,6 +37,7 @@ def _to_dispatch(row: models.Dispatch) -> Dispatch:
         title=row.title,
         content=row.content,
         created_at=row.created_at,
+        attachment=row.attachment_png,
     )
 
 
@@ -155,3 +161,137 @@ class SyncIdempotencyKeyRepository:
                 session.rollback()
                 return False
             return True
+
+
+# --- 004 stats-report (sync engine: Beat tick / cycle) -------------------------------------------
+
+
+def _to_stats_config(row: models.StatsReportConfig) -> StatsReportConfig:
+    return StatsReportConfig(interval_seconds=row.interval_seconds, anchor_at=row.anchor_at)
+
+
+class SyncStatsConfigRepository:
+    """Sync impl of the stats-report config singleton (mirrors AsyncStatsConfigRepository)."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def get(self) -> StatsReportConfig:
+        with self._session_factory() as session:
+            row = session.get(models.StatsReportConfig, 1)
+            if row is None:
+                row = models.StatsReportConfig(id=1, interval_seconds=DEFAULT_INTERVAL_SECONDS)
+                session.add(row)
+                session.commit()
+                session.refresh(row)
+            return _to_stats_config(row)
+
+    def set_interval(self, seconds: int, anchor_at: datetime) -> None:
+        with self._session_factory() as session:
+            row = session.get(models.StatsReportConfig, 1)
+            if row is None:
+                session.add(
+                    models.StatsReportConfig(id=1, interval_seconds=seconds, anchor_at=anchor_at)
+                )
+            else:
+                row.interval_seconds = seconds
+                row.anchor_at = anchor_at
+            session.commit()
+
+    def advance_anchor(self, anchor_at: datetime) -> None:
+        with self._session_factory() as session:
+            row = session.get(models.StatsReportConfig, 1)
+            if row is not None:
+                row.anchor_at = anchor_at
+                session.commit()
+
+
+# "Reached at least 'sent'" = a delivery_transition row to_status='sent' (written once by
+# record_sent). Filtered user_id IS NOT NULL so server-owned reports never count.
+_PER_USER_HOUR_SQL = text(
+    "SELECT d.user_id AS user_id, "
+    "EXTRACT(HOUR FROM dt.at AT TIME ZONE 'UTC')::int AS hour, COUNT(*) AS sends "
+    "FROM delivery_transition dt "
+    "JOIN delivery dl ON dl.id = dt.delivery_id "
+    "JOIN dispatch d ON d.id = dl.dispatch_id "
+    "WHERE dt.to_status = 'sent' AND d.user_id IS NOT NULL "
+    "GROUP BY d.user_id, hour"
+)
+
+_GLOBAL_HOUR_SQL = text(
+    "SELECT EXTRACT(HOUR FROM dt.at AT TIME ZONE 'UTC')::int AS hour, COUNT(*) AS sends "
+    "FROM delivery_transition dt "
+    "JOIN delivery dl ON dl.id = dt.delivery_id "
+    "JOIN dispatch d ON d.id = dl.dispatch_id "
+    "WHERE dt.to_status = 'sent' AND d.user_id IS NOT NULL "
+    "GROUP BY hour"
+)
+
+
+class SyncReportAggregationRepository:
+    """Reads the per-UTC-hour send aggregate from the existing lifecycle tables (data-model §3)."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def per_user_hour_counts(self) -> Mapping[UUID, Mapping[int, int]]:
+        grid: dict[UUID, dict[int, int]] = defaultdict(dict)
+        with self._session_factory() as session:
+            for user_id, hour, sends in session.execute(_PER_USER_HOUR_SQL):
+                grid[user_id][hour] = sends
+        return grid
+
+    def global_hour_counts(self) -> Mapping[int, int]:
+        counts: dict[int, int] = {}
+        with self._session_factory() as session:
+            for hour, sends in session.execute(_GLOBAL_HOUR_SQL):
+                counts[hour] = sends
+        return counts
+
+    def list_accounts(self) -> Sequence[AccountRef]:
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(
+                    models.UserAccount.id,
+                    models.UserAccount.email,
+                    models.UserAccount.is_admin,
+                )
+            )
+            return [AccountRef(id=row[0], email=row[1], is_admin=row[2]) for row in rows]
+
+
+class SyncReportSendRepository:
+    """Creates the server-owned report rows the cycle hands to the existing ``deliver`` task."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def create_report_delivery(self, *, to_email: str, subject: str, body: str, png: bytes) -> UUID:
+        with self._session_factory() as session:
+            dispatch = models.Dispatch(
+                user_id=None,
+                channel=Channel.REPORT.value,
+                title=subject,
+                content=body,
+                attachment_png=png,
+            )
+            session.add(dispatch)
+            session.flush()
+            delivery = models.Delivery(
+                dispatch_id=dispatch.id,
+                contact_id=None,
+                recipient_name=to_email,
+                destination=to_email,
+                status=DeliveryStatus.QUEUED.value,
+            )
+            session.add(delivery)
+            session.flush()
+            session.add(
+                models.DeliveryTransition(
+                    delivery_id=delivery.id,
+                    from_status=None,
+                    to_status=DeliveryStatus.QUEUED.value,
+                )
+            )
+            session.commit()
+            return delivery.id

@@ -20,6 +20,7 @@ class UserAccount:
     id: UUID
     email: str
     is_verified: bool
+    is_admin: bool = False
 
 
 @dataclass(slots=True)

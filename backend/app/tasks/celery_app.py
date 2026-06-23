@@ -14,7 +14,7 @@ def create_celery_app() -> Celery:
         "notification_service",
         broker=settings.broker_url,
         backend=None,
-        include=["app.tasks.liveness", "app.tasks.sending"],
+        include=["app.tasks.liveness", "app.tasks.sending", "app.tasks.reporting"],
     )
     app.conf.update(
         task_ignore_result=True,
@@ -23,6 +23,15 @@ def create_celery_app() -> Celery:
         task_create_missing_queues=True,
         worker_hijack_root_logger=False,
     )
+    # Beat fires a static due-check tick on the cpu pool; the actual cadence lives in the DB
+    # (stats_report_config), so this single static entry covers any interval (research §4).
+    app.conf.beat_schedule = {
+        "stats-report-due-check": {
+            "task": "app.tasks.reporting.stats_report_tick",
+            "schedule": settings.stats_report_due_check_interval_s,
+            "options": {"queue": "cpu"},
+        }
+    }
     return app
 
 
