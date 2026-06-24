@@ -58,12 +58,45 @@ Adding a channel = one new adapter under `adapters/channels/<name>/` implementin
 one binding in `bootstrap.py`; the shared dispatch/resilience core imports no concrete channel
 (Open/Closed — constitution Principle II, enforced by `tests/unit/test_channel_registry.py`).
 
+## Admin & server-wide stats-report (004)
+
+Feature [`004-admin-stats-report`](specs/004-admin-stats-report/) adds the project's first
+**admin-facing, application-defined notification** and finally exercises the constitution's canonical
+**CPU-bound usage-aggregation** job (see its
+[quickstart](specs/004-admin-stats-report/quickstart.md)):
+
+- **Admin account** — exactly one administrator, seeded idempotently by Alembic migration `0003`
+  from `pydantic-settings`/env (dev defaults to `admin@localhost` / `admin`, **refused outside dev**
+  by a settings validator — mirroring the JWT-secret placeholder). The admin is pre-verified and
+  `is_admin`-flagged; it keeps every ordinary capability and gains **no** cross-user data access.
+- **Stats-report frequency** — one server-wide, persisted interval (seconds): default **30 d**,
+  minimum **24 h**, `0` disables, `1–86 399` rejected (422). Admin-only
+  `GET`/`POST /api/v1/admin/stats-report/frequency`; an authenticated non-admin gets **403**, a
+  missing token **401**. Changing it resets the scheduling anchor.
+- **Scheduled reports** — a new **Celery Beat** Deployment (`replicas = 1`) fires a 60 s due-check
+  tick; when due, the **cpu** (prefork) worker — idle since the skeleton, now doing real work — runs
+  one SQL `GROUP BY (user, UTC-hour)` pass and renders a **24-bar PNG per scope** with **matplotlib
+  (Agg)**, then fans each out as an independent resilient email on the **io** worker. Every account
+  gets a personal graph (all-zero if it never sent); the admin additionally gets a **global** graph.
+- **Report email channel** — a new **`Channel.REPORT`** `ChannelPort` adapter (real stdlib `smtplib`,
+  PNG attached; dev → Mailpit) that **reuses the existing resilient delivery pipeline**
+  (retry/backoff + breaker + idempotency + the persisted `queued → sent → …` lifecycle; a report
+  rests at `sent`). Reports are **server-owned** (`dispatch.user_id IS NULL`), so they are excluded
+  from every aggregation and from every user's send-history (no recursion). The only shared-flow
+  change is a **one-time attachment capability** on the `Payload`/delivery flow — existing channel
+  adapters are untouched (Open/Closed, SC-010).
+- **Analytics seeder** — `backend/scripts/seed.py` **COPY-bulk-inserts** ≈1,000 accounts and
+  ≈500,000 completed user-owned sends spread across all 24 UTC hours and many dates, bypassing the
+  live pipeline, to exercise the aggregation at scale:
+  `uv run python backend/scripts/seed.py --accounts 1000 --sends 500000`.
+
 ## Process model
 
 **One uvicorn process per pod**, everywhere — there is no multi-worker process manager layered on
 top. In prod, Kubernetes scales the API by **replica count** (one uvicorn per pod). The Celery
 **cpu** (prefork) and **io** (threads) workers are their own separate processes/services in every
-environment, orthogonal to the API process model.
+environment, orthogonal to the API process model. A single **beat** scheduler (replicas = 1)
+publishes the stats-report due-check tick (004) — the only singleton workload.
 
 ## Why Celery (and not ARQ / TaskIQ)
 
@@ -87,8 +120,9 @@ documented alternative — at the cost of monkey-patching and the associated deb
 ## Layout
 
 `backend/` — FastAPI (hexagonal: `domain/` → `ports/` → `application/`, with `adapters/`, `infra/`,
-`api/`, `tasks/`, `cli/`). `frontend/` — React + Vite (multi-stage → nginx). `deploy/k8s/` — Kustomize
-`base` + `overlays/{dev,prod}` (API, cpu/io workers, frontend, migrate Job, Ingress) with the
-liveness/readiness probes wired; `scripts/` + root `up-*.ps1` — the bring-up entrypoints.
+`api/`, `tasks/`, `cli/`) plus `backend/scripts/seed.py` (the COPY-based analytics seeder).
+`frontend/` — React + Vite (multi-stage → nginx). `deploy/k8s/` — Kustomize `base` +
+`overlays/{dev,prod}` (API, cpu/io workers, **beat** scheduler, frontend, migrate Job, Ingress) with
+the liveness/readiness probes wired; `scripts/` + root `up-*.ps1` — the bring-up entrypoints.
 `.github/workflows/` — CI (ruff, mypy, pytest + Testcontainers, Coveralls) and CD (manifest
 validation + deploy).

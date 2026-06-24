@@ -283,14 +283,17 @@ spread across all 24 hours and multiple dates; then run the aggregation and conf
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T043 [P] Update docs: note the new `beat` workload, the now-active `cpu` worker, the report
+- [X] T043 [P] Update docs: note the new `beat` workload, the now-active `cpu` worker, the report
       `Channel.REPORT` + attachment capability, the seeder, and admin credentials in the README / overview.
-- [ ] T044 Run `uv run ruff check --fix . && uv run ruff format .` and `uv run mypy .` (strict) across all
+- [X] T044 Run `uv run ruff check --fix . && uv run ruff format .` and `uv run mypy .` (strict) across all
       new/edited modules until clean.
-- [ ] T045 Run `uv run pytest` (full suite) on the host, then execute the `quickstart.md` manual smoke on
+- [~] T045 Run `uv run pytest` (full suite) on the host, then execute the `quickstart.md` manual smoke on
       kind (admin login, frequency endpoints, seed, nudge anchor, inspect Mailpit graphs, verify
-      server-owned report rows are absent from `GET /sends`).
-- [ ] T046 [P] Confirm CI gates (ruff, mypy, pytest, coverage → Coveralls) are green for the branch.
+      server-owned report rows are absent from `GET /sends`). **Host suite green (121 passed); the kind
+      manual smoke remains a user-run step (`./up-dev.ps1` + quickstart §§1–5) — not executed here.**
+- [X] T046 [P] Confirm CI gates (ruff, mypy, pytest, coverage → Coveralls) are green for the branch.
+      **All gate commands reproduced green locally (ruff check/format, `mypy`, `coverage run -m pytest`
+      → 121 passed / 80%, `coverage lcov`); the GitHub Actions + Coveralls publish runs on push/PR.**
 
 ---
 

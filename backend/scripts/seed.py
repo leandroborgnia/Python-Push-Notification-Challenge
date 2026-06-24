@@ -32,7 +32,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from sqlalchemy import Engine
 
@@ -106,8 +106,8 @@ def _generate_sends(rng_seed: int, sends: int, user_ids: list[uuid.UUID]) -> Ite
         )
 
 
-def _copy_rows(conn: object, sql: str, rows: Iterator[tuple[object, ...]]) -> None:
-    with conn.cursor() as cur, cur.copy(sql) as copy:  # type: ignore[attr-defined]  # psycopg conn
+def _copy_rows(conn: Any, sql: str, rows: Iterator[tuple[object, ...]]) -> None:
+    with conn.cursor() as cur, cur.copy(sql) as copy:  # conn is the raw psycopg3 Connection
         for row in rows:
             copy.write_row(row)
 
@@ -132,7 +132,7 @@ def seed(
 
     raw = engine.raw_connection()
     try:
-        conn = raw.driver_connection  # the underlying psycopg3 Connection
+        conn: Any = raw.driver_connection  # the underlying psycopg3 Connection
         _copy_rows(
             conn,
             "COPY user_account (id, email, password_hash, is_verified, is_admin) FROM STDIN",
@@ -162,7 +162,7 @@ def seed(
             "COPY delivery_transition (delivery_id, from_status, to_status, at) FROM STDIN",
             transition_rows(),
         )
-        conn.commit()  # type: ignore[attr-defined]
+        conn.commit()
     finally:
         raw.close()
 
