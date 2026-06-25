@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-worker
+  labels:
+    app: cpu-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cpu-worker
+  template:
+    metadata:
+      labels:
+        app: cpu-worker
+    spec:
+      containers:
+        - name: cpu-worker
+          image: __API_IMAGE__
+          # CPU-bound work → prefork pool, dedicated `cpu` queue, pool-identifying nodename
+          # so the liveness ping can target this pool (constitution III).
+          command:
+            - celery
+            - -A
+            - app.tasks.celery_app
+            - worker
+            - --pool=prefork
+            - -n
+            - cpu@%h
+            - -Q
+            - cpu
+            - -c
+            - "4"
+            - --loglevel=INFO
+          env:
+            - name: DATABASE_URL_SYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-sync
+            - name: BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: broker-url
+            # The cpu worker builds the channel registry (incl. the report channel) when it runs the
+            # stats-report cycle, so it carries the same SMTP/From config as the io sender (004).
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-host
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: smtp-port
+            - name: MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: mail-from
+            - name: REPORT_MAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: report-mail-from
+                  optional: true
+          # Workers expose no HTTP surface — liveness is a Celery control ping to THIS pool.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A app.tasks.celery_app inspect ping -d "cpu@$(hostname)" -t 5
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10

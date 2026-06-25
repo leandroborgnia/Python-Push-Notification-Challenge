@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beat
+  labels:
+    app: beat
+spec:
+  # EXACTLY ONE scheduler — Beat is a singleton; two replicas would double-fire the tick
+  # (research §4). The cpu/io workers still scale independently.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: beat
+  template:
+    metadata:
+      labels:
+        app: beat
+    spec:
+      containers:
+        - name: beat
+          image: __API_IMAGE__
+          # Publishes the static stats-report due-check tick to the cpu queue every
+          # stats_report_due_check_interval_s; the actual cadence lives in the DB (004).
+          command:
+            - celery
+            - -A
+            - app.tasks.celery_app
+            - beat
+            - --loglevel=INFO
+          env:
+            - name: BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: broker-url

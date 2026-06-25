@@ -1,0 +1,15 @@
+# Keep the build context lean and prevent a host .venv from clobbering the synced one.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.git/
+*.egg-info/
+dist/
+build/

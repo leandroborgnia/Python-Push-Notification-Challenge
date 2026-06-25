@@ -5,30 +5,34 @@ live in `tasks.md`/code, not here.
 
 ## Prerequisites
 
-- Docker (for `docker compose` and Testcontainers), `uv`, Node/npm (frontend).
+- Docker, `kind`, and `kubectl` for the dev cluster (plus Docker for Testcontainers), `uv`, Node/npm (frontend).
 - Repo checked out on branch `001-system-liveness`.
 
 ## One-command bring-up (US2 / SC-001)
 
 ```bash
-docker compose up          # api + cpu worker + io worker + postgres + rabbitmq + frontend
+scripts/up-dev.sh          # Windows: ./up-dev.ps1 — builds images + brings the stack up on kind
 ```
 
-Migrations are applied during bring-up (`alembic upgrade head`) so `liveness_completion` exists
-(FR-008). Expected: every service reaches a healthy state with no manual steps.
+Brings up api + cpu worker + io worker + postgres + rabbitmq + frontend on a local **kind** cluster.
+Migrations run once per deploy in a `migrate-<tag>` Job (`alembic upgrade head`) so
+`liveness_completion` exists (FR-008), and the API waits for the schema before serving. Expected:
+every workload reaches Ready with no manual steps.
 
-> Day-to-day one-offs run on the host with `uv run …` (or `docker compose exec api uv run …`).
-> Apply migrations manually if running the API outside compose: `uv run alembic upgrade head`.
+> Day-to-day one-offs run on the host with `uv run …` (or
+> `kubectl -n notification exec deploy/notification-api -- …`). Migrations are a discrete step now
+> (the `migrate-<tag>` Job), never the API start command.
 
 ## Validate the health surfaces (US1)
 
 ```bash
-curl -i localhost:8000/livez     # → 200 {"status":"alive"}          (process-only)
-curl -i localhost:8000/readyz    # → 200 {"status":"ready"}          (process + DB)
-curl -s localhost:8000/health | jq   # aggregate: status + per-subsystem breakdown (DB, broker, cpu, io)
+curl -i http://api.localhost/livez     # → 200 {"status":"alive"}          (process-only)
+curl -i http://api.localhost/readyz    # → 200 {"status":"ready"}          (process + DB)
+curl -s http://api.localhost/health | jq   # aggregate: status + per-subsystem breakdown (DB, broker, cpu, io)
 ```
 
-**Failure-mode checks** (map to acceptance scenarios & SC-002/003/004/010):
+**Failure-mode checks** (take a dependency down by scaling it to zero, e.g.
+`kubectl -n notification scale deploy/postgres --replicas=0`; map to acceptance scenarios & SC-002/003/004/010):
 
 | Action | `/livez` | `/readyz` | `/health` |
 |--------|----------|-----------|-----------|
@@ -42,7 +46,7 @@ Key invariants: `/livez` stays 200 in all of the above (no restart loop); `/heal
 ## Validate the deep round-trip (US4 / FR-009 / SC-007)
 
 ```bash
-docker compose exec api uv run python -m app.cli.smoke   # or: uv run smoke-check
+kubectl -n notification exec deploy/notification-api -- python -m app.cli.smoke   # or on host: uv run smoke-check
 echo $?    # 0 = both cpu+io completion rows appeared within the bound; 1 = timeout/failure
 ```
 
@@ -52,9 +56,9 @@ Proves: real task → real broker → real worker (prefork + threads) → **sync
 
 ## Validate the frontend (US3 / SC-006)
 
-Open the frontend (Vite dev server / compose `frontend` service) and confirm the page renders the
-overall verdict + per-subsystem breakdown from `/health`. Stop Postgres → the page reflects
-non-healthy; stop the API → the page shows "unavailable/unknown" (not blank, not false-healthy).
+Open the frontend at **http://app.localhost** and confirm the page renders the overall verdict +
+per-subsystem breakdown from `/health`. Scale Postgres to zero → the page reflects non-healthy;
+scale the API to zero → the page shows "unavailable/unknown" (not blank, not false-healthy).
 
 ## Quality gate (US4 / SC-008 / SC-009)
 
@@ -74,7 +78,7 @@ uv run mypy .
 | Spec item | Validated by |
 |-----------|--------------|
 | US1 (aggregate + probes) | curl table above; `test_livez_readyz.py`, `test_health_aggregate.py` |
-| US2 (one-command bring-up + migration) | `docker compose up`; migration applied |
+| US2 (one-command bring-up + migration) | `scripts/up-dev.sh`; `migrate-<tag>` Job applied |
 | US3 (frontend) | frontend manual check |
 | US4 (gate + smoke) | `pytest`, ruff, mypy; `app.cli.smoke`; `test_smoke_roundtrip.py` |
 | FR-016/017 telemetry | `test_telemetry.py` |

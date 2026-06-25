@@ -73,7 +73,7 @@ smoke CLI, 1 minimal frontend page. No channels, auth, or analytics (explicitly 
 | IV | Resilience (first-class) | ✅ PASS (scoped) | This slice models the liveness round-trip + bounded/timeout checks; full retry/backoff/circuit-breaker belongs to the channel features (out of scope) — no resilience code is removed or precluded. |
 | V | Testing (real Postgres, mocked HTTP, non-negotiable) | ✅ PASS | Real Postgres via Testcontainers, no DB mocking; real broker for the smoke check; respx reserved for external HTTP; coverage → Coveralls. Per constitution v1.2.0, Testcontainers covers Postgres + RabbitMQ (real broker, no eager mode). |
 | VI | Security (tokens, hashing, secrets) | ✅ PASS (scoped) | No auth in this slice (spec out-of-scope); secrets via env only; no secrets in code. |
-| VII | Operations (Docker, GH Actions, one process model/env) | ✅ PASS | `docker compose up` (dev); k8s single-uvicorn pods (prod) with `/livez`+`/readyz`; CI+CD via GitHub Actions; Alembic migration ships with the model. |
+| VII | Operations (Docker, GH Actions, Kubernetes) | ✅ PASS | `docker compose up` (dev); k8s single-uvicorn pods (prod) with `/livez`+`/readyz`; CI+CD via GitHub Actions; Alembic migration ships with the model. |
 
 **Deliberate stack breadth** (observability, Celery, CI/CD) is retained per the constitution and is
 **not** logged as complexity. No gate violations → Complexity Tracking is empty.

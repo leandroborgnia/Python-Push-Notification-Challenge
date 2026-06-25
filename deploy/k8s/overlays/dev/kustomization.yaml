@@ -1,0 +1,65 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: notification
+
+# base + the dev-only in-cluster datastores + the dev mail catcher.
+resources:
+  - ../../base
+  - postgres.yaml
+  - rabbitmq.yaml
+  - rabbitmq-config.yaml
+  - mailpit.yaml
+
+# notification-secrets is BUILT from a gitignored secret.env (up-dev creates it from
+# secret.env.example on first run). No credential values are committed (Principle VI; K6).
+secretGenerator:
+  - name: notification-secrets
+    envs:
+      - secret.env
+
+# Workloads reference `notification-secrets` by a fixed name → no content-hash suffix.
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  # Local dev: a single replica per workload.
+  - target:
+      kind: Deployment
+      name: notification-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: cpu-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: io-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # Dev ingress hosts (kind serves these on the host's :80 — research R2/R4).
+  - target:
+      kind: Ingress
+      name: notification
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: app.localhost
+      - op: replace
+        path: /spec/rules/1/host
+        value: api.localhost

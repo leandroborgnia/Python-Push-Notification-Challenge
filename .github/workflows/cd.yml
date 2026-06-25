@@ -10,12 +10,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-      - name: Validate Kubernetes manifests (kubeconform)
+      - name: Validate rendered Kustomize overlays (kubeconform)
         run: |
+          # Pinned kubeconform release — no floating `releases/latest` tag (Principle I).
           curl -sSL \
-            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
             | tar xz
-          ./kubeconform -strict -summary deploy/k8s/
+          # The dev overlay's secretGenerator reads a gitignored secret.env — materialize the
+          # committed example so the overlay renders (placeholder values only; CI-local file).
+          cp deploy/k8s/overlays/dev/secret.env.example deploy/k8s/overlays/dev/secret.env
+          for env in dev prod; do
+            echo "== validating overlays/$env =="
+            kubectl kustomize "deploy/k8s/overlays/$env" \
+              | ./kubeconform -strict -summary -ignore-missing-schemas -
+          done
 
   deploy:
     needs: validate-manifests

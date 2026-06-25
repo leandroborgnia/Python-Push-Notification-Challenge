@@ -20,3 +20,15 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+      - id: eslint-frontend
+        name: eslint (frontend)
+        entry: npm --prefix frontend run lint
+        language: system
+        files: ^frontend/src/.*\.(ts|tsx)$
+        pass_filenames: false
+      - id: prettier-frontend
+        name: prettier (frontend)
+        entry: npm --prefix frontend run format
+        language: system
+        files: ^frontend/.*\.(ts|tsx|json|css|html)$
+        pass_filenames: false

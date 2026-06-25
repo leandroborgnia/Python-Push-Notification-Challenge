@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # DNS-1123-valid sentinel: the bring-up script's render_apply substitutes `imagetagslot`
+  # with the sanitized per-run tag → migrate-<tag>, so each deploy creates a fresh immutable
+  # Job and a same-tag re-run is a no-op (FR-014, SC-007). The un-substituted name is still
+  # DNS-valid so `kubeconform`/`--dry-run` passes (contract K3).
+  name: migrate-imagetagslot
+  labels:
+    app: notification-migrate
+spec:
+  backoffLimit: 3
+  # Garbage-collect finished Jobs; the immutable per-run name keeps re-runs idempotent.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: notification-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: __API_IMAGE__
+          workingDir: /app
+          # The ONLY place schema migrations run (the API never migrates at startup — K4).
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL_SYNC
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: database-url-sync
+            # 004 admin seed: the 0003 data migration reads these to provision the admin. ENVIRONMENT
+            # gates the placeholder refusal (prod must supply a real admin-password; Principle VI).
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: environment
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: admin-email
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: notification-secrets
+                  key: admin-password

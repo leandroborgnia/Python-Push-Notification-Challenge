@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-deprecated-config
+  labels:
+    app: rabbitmq
+data:
+  # Moved from deploy/rabbitmq/permit-deprecated.conf (retired by this feature).
+  10-permit-deprecated.conf: |
+    # RabbitMQ 4.1 disables transient non-exclusive queues by default, which breaks Celery's
+    # control/pidbox (broadcast) queues used by control.ping / inspect. Re-permit the feature
+    # until kombu/Celery stop declaring them. Additive drop-in (conf.d) — preserves image defaults.
+    deprecated_features.permit.transient_nonexcl_queues = true

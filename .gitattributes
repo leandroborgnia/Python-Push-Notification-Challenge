@@ -1,0 +1,19 @@
+# Normalize line endings so a Windows checkout still produces runnable artifacts.
+# Default: let Git decide text vs binary and normalize to LF in the repo.
+* text=auto
+
+# Shell scripts MUST be LF even on a Windows checkout so they execute under WSL/bash
+# (CRLF mangles the shebang and commands). This pin is load-bearing for the .ps1 wrappers
+# that call `wsl.exe bash ./scripts/up-*.sh` (FR-010, quickstart Scenario 8).
+*.sh text eol=lf
+
+# PowerShell wrappers stay CRLF on Windows.
+*.ps1 text eol=crlf
+
+# --- GitHub Linguist: keep language stats representative of OUR code ---
+# `.specify/` is Spec Kit's generated scaffolding (PowerShell + duplicate bash copies of
+# its workflow scripts), not application code. Mark it vendored so it is excluded from the
+# repository language breakdown — otherwise the tooling's PowerShell dominates the bar.
+.specify/** linguist-vendored
+# Generated lockfile — not authored source.
+frontend/package-lock.json linguist-generated

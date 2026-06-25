@@ -1,0 +1,248 @@
+openapi: 3.1.0
+info:
+  title: Notification Management API (003)
+  version: 1.0.0
+  description: >
+    Auth, contacts, templates, sending, send-status, and the unauthenticated delivery-confirmation
+    webhook. All resource endpoints require a Bearer access token except registration, verification,
+    login, password-reset, and the webhook (machine-to-machine, FR-006 exemption). Foreign-resource
+    access returns 404 (not 403) to avoid leaking existence across users (SC-003).
+servers:
+  - url: http://app.localhost/api/v1
+    description: dev (kind)
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Error:
+      type: object
+      properties:
+        detail: { type: string }
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+    ContactCreate:
+      type: object
+      required: [display_name]
+      description: At least one of email/phone/device_token MUST be present (FR-008).
+      properties:
+        display_name: { type: string }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+        device_token: { type: string, nullable: true }
+    Contact:
+      allOf:
+        - $ref: '#/components/schemas/ContactCreate'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+    TemplateCreate:
+      type: object
+      required: [title, content, channel, recipient_contact_ids]
+      properties:
+        title: { type: string }
+        content: { type: string, description: "SMS channel: ≤160 chars or 422 (FR-018)" }
+        channel: { type: string, enum: [email, sms, push] }
+        recipient_contact_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Must all be contacts owned by the caller (FR-011).
+    Template:
+      allOf:
+        - $ref: '#/components/schemas/TemplateCreate'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, enum: [bearer] }
+    DispatchAck:
+      type: object
+      description: Returned in <1s; does not wait for delivery (FR-020, SC-004).
+      properties:
+        dispatch_id: { type: string, format: uuid }
+        status: { type: string, enum: [accepted] }
+    DeliveryStatus:
+      type: object
+      properties:
+        delivery_id: { type: string, format: uuid }
+        recipient_name: { type: string }
+        destination: { type: string, nullable: true }
+        status: { type: string, enum: [queued, sent, delivered, failed] }
+        failure_reason: { type: string, nullable: true }
+        transitions:
+          type: array
+          items:
+            type: object
+            properties:
+              from_status: { type: string, nullable: true }
+              to_status: { type: string }
+              reason: { type: string, nullable: true }
+              attempt: { type: integer, nullable: true }
+              at: { type: string, format: date-time }
+    DispatchStatus:
+      type: object
+      properties:
+        dispatch_id: { type: string, format: uuid }
+        channel: { type: string, enum: [email, sms, push] }
+        created_at: { type: string, format: date-time }
+        deliveries:
+          type: array
+          items: { $ref: '#/components/schemas/DeliveryStatus' }
+    WebhookConfirmation:
+      type: object
+      required: [provider_ref, outcome]
+      properties:
+        provider_ref: { type: string, description: correlation id we recorded at 'sent' }
+        outcome: { type: string, enum: [delivered, failed] }
+        reason: { type: string, nullable: true }
+paths:
+  /auth/register:
+    post:
+      summary: Register; creates unverified account and initiates email verification (FR-001/003)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } }
+      responses:
+        '201': { description: created (unverified) }
+        '409': { description: email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /auth/verify:
+    post:
+      summary: Consume a verification token (single-use, FR-003)
+      parameters: [{ name: token, in: query, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: verified }
+        '400': { description: invalid/expired/consumed token }
+  /auth/login:
+    post:
+      summary: OAuth2 password login → access token (verified accounts only, FR-004)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: token, content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } } }
+        '400': { description: bad credentials or unverified account }
+  /auth/reset-request:
+    post:
+      summary: Request a password reset email (FR-005)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses:
+        '202': { description: accepted (always, to avoid account enumeration) }
+  /auth/reset-confirm:
+    post:
+      summary: Set new password via reset token; old password becomes invalid (FR-005)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [token, new_password], properties: { token: { type: string }, new_password: { type: string, minLength: 8 } } } } }
+      responses:
+        '200': { description: password updated }
+        '400': { description: invalid/expired token }
+  /contacts:
+    get:
+      summary: List own contacts (FR-009)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: contacts, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Contact' } } } } }
+        '401': { description: unauthenticated }
+    post:
+      summary: Add a contact (FR-008)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ContactCreate' } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Contact' } } } }
+        '401': { description: unauthenticated }
+        '422': { description: no destination provided }
+  /templates:
+    get:
+      summary: List own templates (FR-014)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: templates, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Template' } } } } }
+        '401': { description: unauthenticated }
+    post:
+      summary: Create a template; never sends (FR-011/017)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TemplateCreate' } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Template' } } } }
+        '401': { description: unauthenticated }
+        '422': { description: SMS>160, unknown channel, or recipient not owned }
+  /templates/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    put:
+      summary: Modify own template; never sends (FR-012/017)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TemplateCreate' } } }
+      responses:
+        '200': { description: updated, content: { application/json: { schema: { $ref: '#/components/schemas/Template' } } } }
+        '404': { description: not found / not owned }
+        '422': { description: validation error }
+    delete:
+      summary: Delete own template (FR-013)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: deleted }
+        '404': { description: not found / not owned }
+  /templates/{id}/send:
+    post:
+      summary: Send a valid template; immediate accept, background delivery (FR-019/020/021)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '202': { description: accepted, content: { application/json: { schema: { $ref: '#/components/schemas/DispatchAck' } } } }
+        '400': { description: invalid template to send (no recipients / unsupported channel) (FR-029) }
+        '404': { description: not found / not owned }
+  /sends:
+    get:
+      summary: List own dispatches (FR-027)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: dispatches, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DispatchStatus' } } } } }
+        '401': { description: unauthenticated }
+  /sends/{dispatch_id}:
+    get:
+      summary: View one dispatch's per-recipient outcomes & transitions (FR-027, SC-006)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: dispatch_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: status, content: { application/json: { schema: { $ref: '#/components/schemas/DispatchStatus' } } } }
+        '404': { description: not found / not owned }
+  /webhooks/delivery:
+    post:
+      summary: >
+        Provider delivery confirmation for email/push (FR-031). UNAUTHENTICATED machine-to-machine
+        (FR-006 exemption); correlated by provider_ref; idempotent; uncorrelated callbacks ignored.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/WebhookConfirmation' } } }
+      responses:
+        '204': { description: accepted (also for duplicate/uncorrelated — no state change) }
