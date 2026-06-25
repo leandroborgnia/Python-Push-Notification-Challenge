@@ -9,3 +9,11 @@
 
 # PowerShell wrappers stay CRLF on Windows.
 *.ps1 text eol=crlf
+
+# --- GitHub Linguist: keep language stats representative of OUR code ---
+# `.specify/` is Spec Kit's generated scaffolding (PowerShell + duplicate bash copies of
+# its workflow scripts), not application code. Mark it vendored so it is excluded from the
+# repository language breakdown — otherwise the tooling's PowerShell dominates the bar.
+.specify/** linguist-vendored
+# Generated lockfile — not authored source.
+frontend/package-lock.json linguist-generated
