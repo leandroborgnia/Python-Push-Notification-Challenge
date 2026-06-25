@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { HealthView } from "./components/HealthView";
+import { App } from "./App";
 
 const rootElement = document.getElementById("root");
 if (rootElement === null) {
@@ -10,6 +10,6 @@ if (rootElement === null) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <HealthView />
+    <App />
   </StrictMode>,
 );

@@ -31,13 +31,31 @@ INGRESS_NGINX_MANIFEST="https://raw.githubusercontent.com/kubernetes/ingress-ngi
 require_cmd docker kind kubectl
 
 # --- ensure the kind cluster (idempotent — FR-011) ------------------------
-if kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER_NAME"; then
-  log "kind cluster '${KIND_CLUSTER_NAME}' already exists — reusing."
-else
+# `kind get clusters` lists a cluster as long as its node container exists — even when that
+# container is stopped (e.g. Exited 137 after a host reboot or Docker Desktop restart). In that
+# state the cluster looks present but its API server is unreachable, which used to surface as a
+# confusing validation error at the first `kubectl apply`. So we don't just check presence: we
+# verify reachability, try to revive a stopped node container, and recreate only as a last resort.
+CTX="kind-${KIND_CLUSTER_NAME}"
+if ! kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER_NAME"; then
   log "creating kind cluster '${KIND_CLUSTER_NAME}' (host :80/:443 → ingress)..."
   kind create cluster --name "$KIND_CLUSTER_NAME" --config deploy/k8s/kind-config.yaml
+elif kubectl --context "$CTX" cluster-info --request-timeout=5s >/dev/null 2>&1; then
+  log "kind cluster '${KIND_CLUSTER_NAME}' already exists and is reachable — reusing."
+else
+  warn "kind cluster '${KIND_CLUSTER_NAME}' exists but its API server is unreachable — restarting its node container(s)..."
+  # shellcheck disable=SC2046  # word-splitting the node list is intentional
+  docker start $(kind get nodes --name "$KIND_CLUSTER_NAME" 2>/dev/null) >/dev/null 2>&1 || true
+  if wait_api_reachable "$CTX" "${CLUSTER_WAIT:-90}"; then
+    log "revived the stopped cluster '${KIND_CLUSTER_NAME}' — reusing."
+  else
+    warn "could not revive cluster '${KIND_CLUSTER_NAME}'; recreating it from scratch..."
+    kind delete cluster --name "$KIND_CLUSTER_NAME" >/dev/null 2>&1 || true
+    log "creating kind cluster '${KIND_CLUSTER_NAME}' (host :80/:443 → ingress)..."
+    kind create cluster --name "$KIND_CLUSTER_NAME" --config deploy/k8s/kind-config.yaml
+  fi
 fi
-kubectl config use-context "kind-${KIND_CLUSTER_NAME}" >/dev/null
+kubectl config use-context "$CTX" >/dev/null
 
 # --- ensure ingress-nginx (idempotent) ------------------------------------
 log "ensuring ingress-nginx (${INGRESS_NGINX_REF})..."

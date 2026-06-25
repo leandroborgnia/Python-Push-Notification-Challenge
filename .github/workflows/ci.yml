@@ -53,5 +53,6 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
-      - run: npm run build
+      - run: npm run lint
+      - run: npm run build # tsc --noEmit (typecheck) + vite build
       - run: npm test

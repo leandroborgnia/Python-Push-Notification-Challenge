@@ -6,6 +6,21 @@
 # helpers. Keeping the logic here single-sources the behaviour both scripts (and the .ps1
 # wrappers, via WSL) run (research R5).
 
+# --- PATH: include per-user bin dirs (FR-009, SC-005) ---------------------
+# Per-user tools (e.g. `kind`, `kubectl` under ~/.local/bin or ~/bin) are put on PATH by
+# ~/.profile, which only runs in *login* shells. The .ps1 wrappers invoke this through
+# `wsl.exe bash <script>` — a NON-login shell — so those dirs are absent and require_cmd
+# fails even when the tool is installed. Re-add them here (idempotent, source-time) so the
+# prereq check sees the same tools the user has interactively, however the shell was launched.
+for _user_bin in "$HOME/.local/bin" "$HOME/bin"; do
+  case ":${PATH}:" in
+    *":${_user_bin}:"*) : ;;                                  # already on PATH
+    *) [ -d "$_user_bin" ] && PATH="${_user_bin}:${PATH}" ;;  # prepend only if it exists
+  esac
+done
+unset _user_bin
+export PATH
+
 # --- repo root (FR-007, SC-008) -------------------------------------------
 # Resolve the repo root from any CWD: prefer git, fall back to walking up from this file so it
 # still works in a checkout without git metadata.
@@ -88,6 +103,22 @@ render_apply() {
           -e "s|__FRONTEND_IMAGE__|${FRONTEND_IMAGE}|g" \
           -e "s|migrate-imagetagslot|migrate-${tag_dns}|g" \
     | kubectl apply -f - "$@"
+}
+
+# --- cluster reachability wait --------------------------------------------
+# Poll until the given kube-context's API server answers, or <timeout> seconds elapse.
+# Used to confirm a freshly (re)started kind node container is actually serving before we
+# start applying manifests against it. Returns non-zero on timeout.
+wait_api_reachable() {
+  local ctx="$1" timeout="${2:-90}" waited=0
+  while [ "$waited" -lt "$timeout" ]; do
+    if kubectl --context "$ctx" cluster-info --request-timeout=5s >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 3
+    waited=$((waited + 3))
+  done
+  return 1
 }
 
 # --- rollout wait (FR-008, FR-012, SC-003) --------------------------------

@@ -27,7 +27,7 @@ scripts/up-dev.sh   # Windows: ./up-dev.ps1  — builds images + brings the full
 This builds the multi-stage images, ensures a local **kind** cluster with ingress-nginx, and applies
 the dev overlay (api + cpu worker + io worker + postgres + rabbitmq + frontend). Migrations run once
 per deploy in a `migrate-<tag>` Job — the API waits for the schema before serving. The frontend
-renders `/health` at http://app.localhost. See
+serves the **web admin console** (feature 005, below) at http://app.localhost. See
 [`specs/002-env-up-scripts/quickstart.md`](specs/002-env-up-scripts/quickstart.md) for the bring-up
 and validation guide, [`specs/001-system-liveness/quickstart.md`](specs/001-system-liveness/quickstart.md)
 for the health-surface walkthrough, and [CLAUDE.md](CLAUDE.md) for day-to-day commands.
@@ -90,6 +90,38 @@ Feature [`004-admin-stats-report`](specs/004-admin-stats-report/) adds the proje
   live pipeline, to exercise the aggregation at scale:
   `uv run python backend/scripts/seed.py --accounts 1000 --sends 500000`.
 
+## Web admin console (005)
+
+Feature [`005-web-frontend-console`](specs/005-web-frontend-console/) replaces the skeleton's health
+view with the product's user-facing surface: a cohesive **enterprise-admin SPA** (React + Vite +
+TypeScript on **Ant Design 5**, **TanStack Query 5**, **React Router 6**, **Recharts 2**) that
+consumes the existing `/api/v1` backend with **no business-endpoint changes** (see its
+[quickstart](specs/005-web-frontend-console/quickstart.md) and
+[`frontend/README.md`](frontend/README.md)):
+
+- **Where** — served at http://app.localhost in the kind dev stack, calling the API cross-origin at
+  http://api.localhost. The one backend change the feature adds is FastAPI **`CORSMiddleware`**
+  (allowed origins from `pydantic-settings`, never `*`) so the browser SPA can reach the API — no
+  endpoint, schema, or resilience-behavior change.
+- **Auth (US1)** — a single auth page covering the whole account lifecycle: login, register,
+  email-verify, request reset, confirm reset (OAuth2 password flow + JWT). Verify/reset work by
+  pasting a token or following an emailed `?token=` deep link. The signed-in email + access token
+  live in `localStorage` (`nsvc.session`); any `401` clears the session and returns to the auth page.
+- **App shell** — top app bar (product name • signed-in email • logout) and tab navigation
+  **Home · Contacts · Templates · Send & History**, with the active tab derived from the URL.
+- **Contacts (US2)** — create + paginated listing of the per-user contacts book.
+- **Templates (US3)** — per-user template CRUD over one channel (Email/SMS/Push) with a contacts
+  recipient picker and client-side channel rules (e.g. SMS ≤ 160) mirroring the backend; editing or
+  deleting a template **never sends**.
+- **Send & History (US4)** — send a template (an "accepted for delivery" toast in ≤ 2 s) and track
+  delivery: a history table that polls while any delivery is non-terminal, plus a per-send drawer
+  showing each recipient's state, destination, failure reason, and full transition timeline.
+- **Dashboard (US5)** — a client-side **per-UTC-hour sending** bar chart (24 buckets) aggregated
+  from the signed-in user's recent sends, with summary stats and a recent-window indicator.
+
+Run `npm run dev` in `frontend/` for the standalone Vite dev loop, or bring the full stack up with
+`scripts/up-dev.sh` / `./up-dev.ps1`.
+
 ## Process model
 
 **One uvicorn process per pod**, everywhere — there is no multi-worker process manager layered on
@@ -121,7 +153,7 @@ documented alternative — at the cost of monkey-patching and the associated deb
 
 `backend/` — FastAPI (hexagonal: `domain/` → `ports/` → `application/`, with `adapters/`, `infra/`,
 `api/`, `tasks/`, `cli/`) plus `backend/scripts/seed.py` (the COPY-based analytics seeder).
-`frontend/` — React + Vite (multi-stage → nginx). `deploy/k8s/` — Kustomize `base` +
+`frontend/` — the React + Vite **admin console** SPA (multi-stage → nginx). `deploy/k8s/` — Kustomize `base` +
 `overlays/{dev,prod}` (API, cpu/io workers, **beat** scheduler, frontend, migrate Job, Ingress) with
 the liveness/readiness probes wired; `scripts/` + root `up-*.ps1` — the bring-up entrypoints.
 `.github/workflows/` — CI (ruff, mypy, pytest + Testcontainers, Coveralls) and CD (manifest

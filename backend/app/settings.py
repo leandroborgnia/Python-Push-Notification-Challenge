@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     mail_from: str = "no-reply@notification.local"
+    # Public base URL of the SPA, used to build clickable verify/reset links in auth emails. Dev
+    # default is the kind ingress host; prod overrides via APP_BASE_URL (cf. cors_allow_origins).
+    app_base_url: str = "http://app.localhost"
 
     # Admin account & stats-report (004). Credentials come from env; the committed defaults are a
     # dev-only placeholder refused outside dev by the validator below (FR-002, Principle VI).
@@ -59,6 +62,11 @@ class Settings(BaseSettings):
     report_mail_from: str | None = None
     # Celery Beat tick cadence — how often the due-check fires (the cadence itself lives in the DB).
     stats_report_due_check_interval_s: float = 60.0
+
+    # CORS — origins permitted to call the API from a browser (the SPA at app.localhost). The
+    # list is env-overridable (pydantic parses a JSON array) and MUST stay an explicit allow-list,
+    # never "*" (Principle I/VI). The SPA authenticates with a Bearer header, not cookies.
+    cors_allow_origins: list[str] = ["http://app.localhost"]
 
     # Simulated channel provider (HTTP base URL; respx-mocked in tests).
     provider_base_url: str = "http://localhost:9000"
